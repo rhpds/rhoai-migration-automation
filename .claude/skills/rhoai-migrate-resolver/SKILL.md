@@ -25,7 +25,7 @@ Ask the user up front which phase they're in. If they're not sure: check the RHO
 
 3. **One blocker at a time.** Don't dump the whole list. Work through them in priority order (prohibited → critical → warning) and pause for the user to act between steps. This applies in both emit-only and execute modes.
 
-4. **Cite sources.** Every "why" must cite the relevant section of [architectural-changes.md](../../../knowledge/architectural-changes.md) or [ignore.md](../../../knowledge/ignore.md) (the migration guide). Both live in the gitignored `knowledge/` folder; if a user opens this skill on a fresh clone the files won't be there — fall back to the inline quotes already embedded in each resolver. Use `§N.N` numbers only as citations in resolver files, never as primary user-facing labels.
+4. **Cite sources.** Every "why" must cite [architectural-changes.md](../../../architectural-changes.md) (the platform-rationale doc, in the repo) by section name, or — for the procedural step-by-step — the official Red Hat OpenShift AI 2.25.4 → 3.3.2 migration guide by `§N.N` section number. The migration guide is **not** committed to this repo; cite it by section number only. Each resolver file already embeds inline quotes from architectural-changes.md, so authoritative wording is available even when the file isn't open. Use `§N.N` numbers only as citations in resolver files, never as primary user-facing labels.
 
 5. **Before emitting any `oc` command, load and follow [reference/oc-patterns.md](reference/oc-patterns.md).** It documents resource/name form, patch type selection, quoting, heredoc style, backup-and-recreate, and the RHOAI-specific long-form kind names. Do not improvise an `oc` command block that contradicts those patterns. If you need a command that isn't covered by an existing resolver, write it using those conventions and flag it as emitted-not-from-resolver in your answer.
 
@@ -63,7 +63,7 @@ Load the resolver file with `Read`. Present to the user:
 
 1. **What rhai-cli flagged** — quote the message
 2. **Why this change** — 1–2 sentences from architectural-changes.md
-3. **Which migration-guide section covers it** — §N.N reference into ignore.md
+3. **Which migration-guide section covers it** — `§N.N` reference into the official Red Hat migration guide
 4. **Commands to run** — copy-pastable, one block
 5. **How to verify** — a read-only `oc get` the user can run to confirm
 

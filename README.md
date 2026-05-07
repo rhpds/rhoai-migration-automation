@@ -95,7 +95,7 @@ A Claude Code skill, [rhoai-migrate-resolver](.claude/skills/rhoai-migrate-resol
 - **Pre-upgrade tasks** — resolve every blocker reported by `rhai-cli lint --target-version 3.3.2`.
 - **Post-upgrade tasks** — verify the freshly-upgraded 3.3.2 cluster and walk each component's finalization work.
 
-The skill is **read-only on the cluster by default** — it recommends `oc` commands and explains *why* each change is needed (citing [architectural-changes.md](knowledge/architectural-changes.md), gitignored). The user can opt into "execute mode" per-resolver by saying *"run the commands"* / *"just do it"*, in which case the skill runs them with pauses after destructive steps. See the *Hard rules* section in [SKILL.md](.claude/skills/rhoai-migrate-resolver/SKILL.md).
+The skill is **read-only on the cluster by default** — it recommends `oc` commands and explains *why* each change is needed (citing [architectural-changes.md](architectural-changes.md)). The user can opt into "execute mode" per-resolver by saying *"run the commands"* / *"just do it"*, in which case the skill runs them with pauses after destructive steps. See the *Hard rules* section in [SKILL.md](.claude/skills/rhoai-migrate-resolver/SKILL.md).
 
 ### Use the skill inside Claude Code
 

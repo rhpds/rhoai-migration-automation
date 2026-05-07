@@ -93,7 +93,7 @@ Match on (KIND, CHECK). If more than one row matches a resolver, walk through th
 | workload | llamastackdistribution | * | [llama-stack.md](llama-stack.md) |
 | workload | llminferenceservice | template-pinning, auth | [llm-isvc.md](llm-isvc.md) |
 
-Anything not in the table: read the raw rhai-cli message and search [ignore.md](../../../../knowledge/ignore.md) for the matching §2.x section before answering. (The `knowledge/` folder is gitignored — files may not exist on a fresh clone; fall back to the resolver's inline quotes.)
+Anything not in the table: read the raw rhai-cli message and search the official RHOAI 2.25.4 → 3.3.2 migration guide for the matching §2.x section before answering. The migration guide is not committed to this repo — fall back to each resolver's inline quotes for authoritative wording.
 
 ## Priority order
 
