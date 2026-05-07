@@ -14,11 +14,22 @@ Ask the user up front which phase they're in. If they're not sure: check the RHO
 
 ## Hard rules
 
-1. **You are read-only on the cluster.** Never run `oc apply`, `oc patch`, `oc delete`, `oc create`, helm, kubectl mutations, or any cluster-modifying command via Bash. Only read-only `oc get` / `oc describe` / `oc logs` are allowed, and only when the user asks for one.
-2. **Give the user the commands; let them run them.** Every resolution step ends with a fenced shell block the user copy-pastes. Always explain *what it changes* and *why*, then print the command.
-3. **One blocker at a time.** Don't dump the whole list. Work through them in priority order (prohibited → critical → warning) and pause for the user to act between steps.
+1. **Default mode: emit commands, do not execute them.** Unless the user *explicitly* tells you to execute the fix, you never run `oc apply`, `oc patch`, `oc delete`, `oc create`, helm, kubectl mutations, or any cluster-modifying command via Bash. Read-only `oc get` / `oc describe` / `oc logs` are fine for diagnosis. Every resolution step ends with a fenced shell block the user copy-pastes. Always explain *what it changes* and *why* before printing the command.
+
+2. **Explicit opt-in for execution.** The user may switch to "execute-for-me" mode by saying something unambiguous like *"run the commands"*, *"just do it"*, *"apply the fix"*, *"run the fix for me"*, or *"go ahead and execute"*. When that happens:
+   - You may run the mutating commands in sequence.
+   - **Still print the command first, then run it** — so the transcript contains a record of what was executed. Don't batch unrelated commands into one opaque block.
+   - **Pause after destructive steps** (delete, force-remove finalizers, CRD delete, CSV delete, namespace finalize via API `/finalize`) and confirm the expected state before the next step. One failure should halt the chain, not cascade.
+   - Opt-in is **scoped to the current resolver / fix in progress**. If the user moves to a new blocker, revert to default (emit-only) and re-ask if they want execution for that one too. Do not treat a single "run it" as a blanket authorization for the whole migration.
+   - If a command is genuinely risky (force-removing finalizers, deleting CRDs with potentially-live data, force-finalizing a namespace), **surface the risk in one sentence before running** and give the user a chance to interrupt.
+
+3. **One blocker at a time.** Don't dump the whole list. Work through them in priority order (prohibited → critical → warning) and pause for the user to act between steps. This applies in both emit-only and execute modes.
+
 4. **Cite sources.** Every "why" must cite the relevant section of [architectural-changes.md](../../../architectural-changes.md) or [ignore.md](../../../ignore.md) (the migration guide). Use `§N.N` numbers only as citations in resolver files, never as primary user-facing labels.
+
 5. **Before emitting any `oc` command, load and follow [reference/oc-patterns.md](reference/oc-patterns.md).** It documents resource/name form, patch type selection, quoting, heredoc style, backup-and-recreate, and the RHOAI-specific long-form kind names. Do not improvise an `oc` command block that contradicts those patterns. If you need a command that isn't covered by an existing resolver, write it using those conventions and flag it as emitted-not-from-resolver in your answer.
+
+6. **Never use execute mode for actions outside the current resolver's scope.** If the user opts you into execution for, say, the Kueue resolver, that does NOT authorize you to proceed into kserve conversions, workbench rebuilds, or the chapter-3 upgrade on your own. Stop at the end of the current resolver and re-ask.
 
 ## Pre-upgrade workflow
 
