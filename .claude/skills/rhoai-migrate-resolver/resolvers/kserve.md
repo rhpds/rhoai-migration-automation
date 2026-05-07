@@ -105,6 +105,32 @@ oc get servingruntime -A -o json \
   | jq -r '.items[] | select(.spec.multiModel==true) | "\(.metadata.namespace)/\(.metadata.name)"'
 ```
 
+#### Stale ModelMesh resources are common
+
+Even after every active ModelMesh ISVC is converted, **leftover** ServingRuntimes (`multiModel: true`) and unreferenced ISVCs are easy to miss — they live in user namespaces and don't show up in dashboards once dashboards switch from "Multi-model serving" to KServe-only. Sweep:
+
+```
+# ServingRuntimes with multiModel=true and no ISVC referencing them
+oc get servingruntime -A -o json | jq -r '
+  .items[]
+  | select(.spec.multiModel==true)
+  | "\(.metadata.namespace)/\(.metadata.name)  (age: \((now - (.metadata.creationTimestamp | fromdateiso8601)) / 86400 | floor) days)"
+'
+
+# ModelMesh ISVCs (annotation OR status mode) — even if 0 from the active sweep above,
+# also check status.deploymentMode in case rhai-cli only matched one source
+oc get isvc -A -o json | jq -r '
+  .items[]
+  | select((.metadata.annotations."serving.kserve.io/deploymentMode" // "") == "ModelMesh"
+           or (.status.deploymentMode // "") == "ModelMesh")
+  | "\(.metadata.namespace)/\(.metadata.name)  status.ready=\((.status.conditions[]? | select(.type=="Ready") | .status) // "unknown")"
+'
+```
+
+Real-world counts: a real customer pre-prod cluster had 1 stale ISVC (608 days old) + 3 stale multi-model ServingRuntimes (208–666 days old) that all needed deleting before upgrade — none were active workloads, just forgotten test resources. Delete with `oc delete isvc <name> -n <ns>` and `oc delete servingruntime <name> -n <ns>`.
+
+> **Don't confuse v1alpha1 ServingRuntime with ModelMesh.** Several KServe single-model ServingRuntimes (`multiModel: false`) ship at `serving.kserve.io/v1alpha1` — that's just the API version, not a sign of ModelMesh. They're safe to leave untouched. The only signal for ModelMesh is `spec.multiModel: true`.
+
 ---
 
 ## § Update the inferenceservice-config ConfigMap

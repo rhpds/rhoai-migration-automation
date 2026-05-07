@@ -67,13 +67,96 @@ Each owner must rebuild their Dockerfile to:
 - Remove the oauth-proxy sidecar config; 3.x uses kube-rbac-proxy injected by the platform.
 - Use path-based routing via Gateway API (3.x), not the 2.x Route-based path handling.
 
-The owner pushes the new image (new tag), updates the ImageStream, and recreates the Notebook. Red Hat does not provide an automated rebuild — this is an application-owner task. Survey with:
+The owner pushes the new image (new tag, by convention `<original-tag>-gw` for "gateway-ready"), updates the ImageStream, and recreates the Notebook. Red Hat does not provide an automated rebuild — this is an application-owner task. Survey with:
 
 ```
 # For each BYON IS, print who owns it (from the notebook-image-creator annotation)
 oc get imagestream -n redhat-ods-applications -l app.kubernetes.io/created-by=byon \
   -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.annotations.opendatahub\.io/notebook-image-creator}{"\n"}{end}'
 ```
+
+> Don't double-count Pipeline runtime images. ImageStreams matching `^runtime-` (e.g. `runtime-pytorch`, `runtime-rocm-tensorflow`) are AI-Pipeline runtime base images, not workbenches. The operator auto-updates them on upgrade — exclude from the BYON list above.
+
+#### Reuse the same `-gw` image across multiple clusters (dev → preprod → prod)
+
+Once a `-gw` image is built and tested on one cluster, it can be reused as-is on other clusters with the same source image — no rebuild per cluster. Pull from the source cluster's internal registry (or any external registry the image was pushed to), then push to the target's internal registry:
+
+```
+# On the target cluster
+SRC_IMAGE=<dev-internal-registry>/redhat-ods-applications/<imagestream>:<tag>-gw
+INTERNAL_REG=$(oc get route default-route -n openshift-image-registry -o jsonpath='{.spec.host}')
+
+podman login "${INTERNAL_REG}" -u "$(oc whoami)" -p "$(oc whoami -t)" --tls-verify=false
+podman pull "$SRC_IMAGE"
+podman tag  "$SRC_IMAGE" "${INTERNAL_REG}/redhat-ods-applications/<imagestream>:<tag>-gw"
+podman push "${INTERNAL_REG}/redhat-ods-applications/<imagestream>:<tag>-gw" --tls-verify=false
+
+# Import as a tag on the target cluster's ImageStream
+oc tag "${INTERNAL_REG}/redhat-ods-applications/<imagestream>:<tag>-gw" \
+       "<imagestream>:<tag>-gw" \
+       -n redhat-ods-applications --reference-policy=local --insecure=true
+```
+
+`--reference-policy=local` makes the IS pin the image to the local registry (rather than re-resolving against the source registry, which the target cluster can't reach). `--insecure=true` is needed for the default OpenShift internal registry self-signed cert.
+
+#### Known RStudio `-gw` build gotchas
+
+If you're building the RStudio `-gw` image yourself (or auditing one), two specific NGINX config bugs to watch for:
+
+1. **Redirect strips `NB_PREFIX`.** The stock RStudio image redirects to `/rstudio/` without the workbench's `NB_PREFIX`, which works under 2.x Routes but produces "page not found" under 3.x Gateway API path-based routing. Fix: keep `NB_PREFIX` in every `Location:` header NGINX emits.
+2. **`/api` endpoint `SCRIPT_FILENAME` resolution.** An inline rewrite + FastCGI for `${NB_PREFIX}/api` breaks `SCRIPT_FILENAME` because the variable depends on the NGINX `root` directive in the original `/api/` block. Fix: revert `/api` endpoints to a 302 redirect pattern, not an inline rewrite. Symptom of the bug: pod 2/2 Ready but readiness probe returns 403; users see "Service Unavailable".
+
+Both bugs were observed in real-world `-gw` builds and require a rebuild after fixing the NGINX config.
+
+#### RStudio is Tech Preview and not built by default
+
+The `rstudio-rhel9` and `cuda-rstudio-rhel9` ImageStreams ship with the RHOAI operator but have **no built tag** — the BuildConfig requires RHEL subscription credentials and must be triggered manually:
+
+```
+# Check whether the BuildConfigs have ever produced a usable tag
+oc get is rstudio-rhel9 cuda-rstudio-rhel9 -n redhat-ods-applications -o custom-columns='NAME:.metadata.name,TAGS:.status.tags[*].tag'
+# Empty TAGS column = never built. Trigger:
+oc start-build rstudio-server-rhel9 -n redhat-ods-applications --follow
+oc start-build cuda-rstudio-server-rhel9 -n redhat-ods-applications --follow
+```
+
+Plan separately: building RStudio for the first time on a customer cluster usually needs the cluster admin to attach a RHEL entitlement to the cluster, which is its own ticket.
+
+#### GPU workbench using a sha256 digest
+
+Some users hard-code the image as `image: ...@sha256:<digest>` in the Notebook spec. Two problems:
+
+- The digest can disappear from the source registry (image GC, retention policy) — workbench then fails to start.
+- It's invisible to BYON discovery (`oc get is -l app.kubernetes.io/created-by=byon` won't list it).
+
+After the upgrade — or as part of pre-upgrade hygiene — switch to an ImageStream tag reference. Example for a CUDA Jupyter workbench:
+
+```
+NS=<ns>; NAME=<notebook>
+oc patch notebook "$NAME" -n "$NS" --type=merge -p '{
+  "spec":{"template":{"spec":{"containers":[{
+    "name":"'"$NAME"'",
+    "image":"image-registry.openshift-image-registry.svc:5000/redhat-ods-applications/custom-rh-cuda-jupyter-datascience-py311-main:jupyter-datascience-c9s-py311-cuda-devel-main"
+  }]}}}}'
+```
+
+Find sha256-pinned notebooks first:
+
+```
+oc get notebooks -A -o json | jq -r '.items[] | select(.spec.template.spec.containers[0].image | test("@sha256:")) | "\(.metadata.namespace)/\(.metadata.name)  image=\(.spec.template.spec.containers[0].image)"'
+```
+
+#### Image registry change between 2.x tags
+
+The OOTB workbench images switched their source registry between tag generations:
+
+| Tag | Source registry |
+|---|---|
+| `1.2`–`2024.2` | `quay.io/modh/*` or `quay.io/opendatahub/*` (community) |
+| `2025.1`+ | `registry.redhat.io/rhoai/odh-workbench-*` (GA) |
+| `2025.2`+ | Same `registry.redhat.io/...` plus Python 3.12 / UBI 9 base |
+
+Both remain functional after the 3.3.2 upgrade. The migration just bumps the operator-managed ImageStreams; existing Notebook CRs keep their existing image refs unless the owner explicitly bumps the tag.
 
 ### 4. All workbenches must be Stopped before the upgrade
 

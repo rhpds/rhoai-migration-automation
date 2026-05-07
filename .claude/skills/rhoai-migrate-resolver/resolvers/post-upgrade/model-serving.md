@@ -111,6 +111,36 @@ oc delete namespace knative-serving --ignore-not-found
    ```
 2. If no LLMInferenceService exists, the operator is harmless but wasted — same uninstall commands apply when convenient.
 
+### Inference 503s from a NetworkPolicy that pins ingress to a specific router shard
+
+**Symptom:** ISVC pods Running, ISVC `Ready=True`, but `curl https://<isvc-route>/v1/models` from outside the cluster returns HTTP 503.
+
+**Cause:** in tightly-controlled environments, namespaces hosting models often have a NetworkPolicy (commonly named `internal-1`) that allows ingress only from a specific router shard pod selector — for example, `internal-router-shard`. RHOAI 3.x creates ISVC routes against the **default** router (and the data-science-gateway's HTTPRoute attaches there), so traffic from the default router pods gets dropped by the NetworkPolicy and the user sees a 503.
+
+This was hit on the pre-prod cluster in two namespaces (`llmaas--runtime-int`, `xe-support-ai--models`). Diagnose by listing NetworkPolicies in any 503-affected namespace and inspecting the `from` selector.
+
+**Fix:** broaden the `from` selector to match the `openshift-ingress` namespace (which contains both the default router and the data-science-gateway), instead of pinning to a specific router pod label:
+
+```
+NS=<isvc-namespace>   # e.g. llmaas--runtime-int
+oc patch networkpolicy internal-1 -n "$NS" --type=json \
+  -p='[{"op":"replace","path":"/spec/ingress/0/from/0","value":{"namespaceSelector":{"matchLabels":{"name":"openshift-ingress"}}}}]'
+```
+
+(Adjust `/spec/ingress/0/from/0` if your NetworkPolicy structure is different — `oc get networkpolicy internal-1 -n "$NS" -o yaml` first.)
+
+If you have many namespaces with the same NetworkPolicy:
+
+```
+for ns in $(oc get networkpolicy -A -o json | jq -r '.items[] | select(.metadata.name=="internal-1") | .metadata.namespace'); do
+  echo "patching $ns"
+  oc patch networkpolicy internal-1 -n "$ns" --type=json \
+    -p='[{"op":"replace","path":"/spec/ingress/0/from/0","value":{"namespaceSelector":{"matchLabels":{"name":"openshift-ingress"}}}}]'
+done
+```
+
+Verify by curling a previously-503'ing model endpoint.
+
 ### Service Mesh v2 operator not removed
 
 **Symptom:** OSSM v2 resources remain; Gateway API resources don't function correctly.

@@ -93,7 +93,7 @@ Match on (KIND, CHECK). If more than one row matches a resolver, walk through th
 | workload | llamastackdistribution | * | [llama-stack.md](llama-stack.md) |
 | workload | llminferenceservice | template-pinning, auth | [llm-isvc.md](llm-isvc.md) |
 
-Anything not in the table: read the raw rhai-cli message and search [ignore.md](../../../../ignore.md) for the matching §2.x section before answering.
+Anything not in the table: read the raw rhai-cli message and search [ignore.md](../../../../knowledge/ignore.md) for the matching §2.x section before answering. (The `knowledge/` folder is gitignored — files may not exist on a fresh clone; fall back to the resolver's inline quotes.)
 
 ## Priority order
 

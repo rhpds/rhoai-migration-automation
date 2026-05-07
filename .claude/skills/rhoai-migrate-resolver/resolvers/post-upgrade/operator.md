@@ -57,6 +57,30 @@ oc get dsc -o jsonpath='{range .items[0].status.conditions[?(@.type=="KueueReady
 
 Kueue features can be re-enabled post-upgrade via the Red Hat Build of Kueue operator (see architectural-changes.md § *Workload Scheduling: Kueue Transition*) — that's a separate setup step after the migration.
 
+## GatewayConfig stuck "Not Ready" — NetworkPolicy webhook blocks it
+
+**Symptom:** post-upgrade, `oc get gatewayconfig default-gateway --all-namespaces -o wide` shows `READY: False`, and the dashboard URL doesn't resolve.
+
+**Cause:** the RHOAI 3.x GatewayConfig reconciler creates a NetworkPolicy in the `openshift-ingress` namespace to allow ingress traffic to `data-science-gateway`. On clusters with an SRE-managed admission webhook (typical name: `sre-networkpolicies-validation`) restricting NetworkPolicy creation in `openshift-*` namespaces, that POST gets rejected → GatewayConfig sits Not Ready forever.
+
+This was hit on **both** the dev cluster and the pre-prod cluster. It's reproducible enough to call a known issue rather than environment-specific.
+
+**Fix:** disable the operator-managed NetworkPolicy for the GatewayConfig. The cluster's ingress isolation continues to be enforced by whatever the SRE webhook set up; you're just opting RHOAI out of also writing one.
+
+```
+oc patch gatewayconfig default-gateway --type=merge \
+  -p '{"spec":{"networkPolicy":{"ingress":{"enabled":false}}}}'
+```
+
+Verify:
+
+```
+oc get gatewayconfig default-gateway -o jsonpath='phase={.status.phase}  ingressMode={.status.ingressMode}{"\n"}'
+# expect: phase=Ready  ingressMode=OcpRoute
+```
+
+If you don't run an SRE webhook (most non-managed-OpenShift clusters), the default `networkPolicy.ingress.enabled=true` is fine and you don't need this patch.
+
 ## Disconnected-cluster OSSM3 failure
 
 > After upgrading on a disconnected cluster, the `servicemeshoperator3` subscription can fail, leaving DSCI stuck `<not Ready>` and `data-science-gateway` with `Unknown` status.

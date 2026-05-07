@@ -43,6 +43,39 @@ oc get dspa "$NAME" -n "$NS" -o yaml > /tmp/dspa-$NAME.yaml
 oc apply -f /tmp/dspa-$NAME.yaml
 ```
 
+## Patch the DSPA CRD's storedVersions
+
+Even after every DSPA *resource* is at `v1`, the CRD itself may still list `v1alpha1` in `.status.storedVersions` — a leftover from the days the cluster did serve v1alpha1. The 3.3.2 operator's CRD bump refuses to apply when storedVersions includes a removed version (same class of OLM error as `risk of data loss updating "<crd>": new CRD removes version v1alpha1 that is listed as a stored version`).
+
+Check + patch:
+
+```
+oc get crd datasciencepipelinesapplications.datasciencepipelinesapplications.opendatahub.io \
+  -o jsonpath='{.status.storedVersions}'; echo
+# Expected: ["v1"]   — proceed.
+# If you see ["v1alpha1","v1"]: patch.
+
+oc patch crd datasciencepipelinesapplications.datasciencepipelinesapplications.opendatahub.io \
+  --subresource=status --type=merge -p '{"status":{"storedVersions":["v1"]}}'
+```
+
+Only safe to do this once `oc get dspa -A | grep -c v1alpha1` returns `0`.
+
+## ArgoCD-managed roles — advisory only
+
+`check_before_upgrade.sh` flags any `Role` / `ClusterRole` granting `update` on `datasciencepipelinesapplications/api` that doesn't match the 3.x role name list. On clusters where DSPA-related roles are deployed by ArgoCD (or any other GitOps tool), you'll see lines like:
+
+```
+WARNING: Role pipeline-runner in namespace mlops-prod has unexpected verbs on dspa/api
+```
+
+**Don't try to fix these by hand.** Patches you apply will be immediately reverted by ArgoCD's reconciliation. Two valid responses:
+
+1. **Leave them.** The 3.x operator auto-creates the 3.x roles in addition; your old ArgoCD-managed roles continue to work or quietly become no-ops. Confirmed advisory on real clusters with 12+ such roles.
+2. **Update the GitOps source-of-truth.** If you'd rather have a clean `check_before_upgrade.sh` run, update the role definitions in your ArgoCD application repo to match the 3.x verb list, then sync.
+
+Either way, this isn't a migration blocker.
+
 ## Verify
 
 ```
