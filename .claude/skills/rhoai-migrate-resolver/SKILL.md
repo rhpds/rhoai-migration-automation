@@ -41,7 +41,13 @@ Before touching any blocker, verify the platform meets the hard prerequisites. O
 bash .claude/skills/rhoai-migrate-resolver/scripts/prereqs.sh
 ```
 
-The script is read-only. It checks: OCP ≥ 4.19.9, cluster-admin context, default StorageClass, `registry.redhat.io` pull secret, and DSC/DSCI presence. Any FAIL must be resolved before continuing.
+The script is read-only. It checks: OCP ≥ 4.19.9, cluster-admin context, default StorageClass, `registry.redhat.io` pull secret, and DSC/DSCI presence. Any FAIL must be resolved before continuing. The script also flags **cluster backup** as a `WARN` — see Step 1b below.
+
+### Step 1b — confirm a verified backup is in place ([resolvers/backup.md](resolvers/backup.md))
+
+For in-place migrations, a verified backup is the **only rollback path**. This is not a `rhai-cli` finding because it cannot be inspected from inside the cluster — surface it as a hard prerequisite the user attests to, walked through by [resolvers/backup.md](resolvers/backup.md). The full execution procedure (etcd snapshot + OADP install + S3 wiring + restore drill) is in the repo's [BACKUP-RESTORE.md](../../../BACKUP-RESTORE.md).
+
+Walk it before any blocker resolution. The mutating resolvers (Kueue → Removed, KServe conversions, operator uninstalls) cannot be safely rolled back without a backup taken first.
 
 ### Step 2 — get the rhai-cli output
 
@@ -124,6 +130,7 @@ Resolvers currently cover:
 
 | Resolver | Handles |
 | --- | --- |
+| [backup.md](resolvers/backup.md) | Verified backup (etcd + OADP) — hard prerequisite walked before any mutating step |
 | [ocp.md](resolvers/ocp.md) | OCP < 4.19.9 |
 | [cert-manager.md](resolvers/cert-manager.md) | cert-manager Operator not installed |
 | [kueue.md](resolvers/kueue.md) | Kueue managementState ≠ Removed |

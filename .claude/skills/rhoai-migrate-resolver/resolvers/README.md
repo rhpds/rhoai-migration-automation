@@ -99,12 +99,13 @@ Anything not in the table: read the raw rhai-cli message and search the official
 
 When walking the user through results, sequence the resolvers so that dependencies resolve before dependents:
 
-1. **ocp.md** — must be on 4.19.9+ before anything else
-2. **cert-manager.md** — installed early; required by Kueue/KServe/Ray in 3.x
-3. **kueue.md** — Managed → Removed (architectural-changes.md § Kueue Transition: leaving as Managed causes unrecoverable cluster instability)
-4. **workbenches.md** — rebuild custom images, bump code-server/RStudio, then stop all
-5. **trustyai.md** + **llama-stack.md** + **ray.md** + **pipelines.md** — backups / pre-upgrade checks (order doesn't matter)
-6. **kserve.md** — the biggest block: convert ISVCs, then flip DSC/DSCI, then uninstall the three operators
-7. **llm-isvc.md** — pin templates last, just before the upgrade
+1. **backup.md** — verified backup is the **only** rollback for in-place migration. Walk this *before any mutating step*. Layers 1 (etcd) and 2 (OADP) must both be in place before resolvers 3 onward are touched. See the repo-level [BACKUP-RESTORE.md](../../../../BACKUP-RESTORE.md) for the full execution procedure.
+2. **ocp.md** — must be on 4.19.9+ before anything else
+3. **cert-manager.md** — installed early; required by Kueue/KServe/Ray in 3.x
+4. **kueue.md** — Managed → Removed (architectural-changes.md § Kueue Transition: leaving as Managed causes unrecoverable cluster instability)
+5. **workbenches.md** — rebuild custom images, bump code-server/RStudio, then stop all
+6. **trustyai.md** + **llama-stack.md** + **ray.md** + **pipelines.md** — backups / pre-upgrade checks (order doesn't matter)
+7. **kserve.md** — the biggest block: convert ISVCs, then flip DSC/DSCI, then uninstall the three operators
+8. **llm-isvc.md** — pin templates last, just before the upgrade
 
 Re-run `rhai-cli lint` between major phases — some checks only activate once prior items are done (e.g. the DSCI `serviceMesh` check doesn't fire until Serverless ISVCs are gone).

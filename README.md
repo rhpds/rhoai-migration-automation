@@ -44,9 +44,9 @@ INSTALL_TRUSTYAI=0 \
 
 Sample flags (`INSTALL_RAY`, `INSTALL_WORKBENCHES`, etc.) all default to `1`. Full list is at the top of [30-samples/run.sh](rhoai-2254-install/30-samples/run.sh). If a single sample fails, the phase keeps going and the failed samples are reported at the end — rerun just that one with `./30-samples/<name>/run.sh`.
 
-### Reproducing a customer cluster from an rhai-cli assessment
+### Reproducing a source cluster from an rhai-cli assessment
 
-`install-from-assessment.sh` takes an `rhai-cli lint --output yaml` assessment file and runs `install.sh` with matching env vars — useful for building a test cluster that would yield a similar assessment report (same migration issues and blockers), so you can rehearse the migration against a representative shape without exact customer data.
+`install-from-assessment.sh` takes an `rhai-cli lint --output yaml` assessment file and runs `install.sh` with matching env vars — useful for building a test cluster that would yield a similar assessment report (same migration issues and blockers), so you can rehearse the migration against a representative shape without copying any source-cluster data.
 
 ```sh
 cd rhoai-2254-install
@@ -83,10 +83,11 @@ A successful install leaves two workloads in non-Ready states on purpose — don
 
 ## After the install
 
-1. Run the migration assessment (`rhai-cli lint --target-version 3.3.2`).
-2. Resolve every blocker — the [rhoai-migrate-resolver](.claude/skills/rhoai-migrate-resolver/) skill walks you through the pre-upgrade tasks step-by-step.
-3. Run the upgrade itself.
-4. Walk through post-upgrade tasks — the same skill covers this phase.
+1. (Optional but recommended for rehearsal) **Take a backup** so you can roll the cluster back and re-run the migration. See [BACKUP-RESTORE.md](BACKUP-RESTORE.md) for the four-layer approach (etcd, OADP, RHOAI config export, rhai-cli helpers) and a restore drill.
+2. Run the migration assessment (`rhai-cli lint --target-version 3.3.2`).
+3. Resolve every blocker — the [rhoai-migrate-resolver](.claude/skills/rhoai-migrate-resolver/) skill walks you through the pre-upgrade tasks step-by-step.
+4. Run the upgrade itself.
+5. Walk through post-upgrade tasks — the same skill covers this phase.
 
 ## Guided migration (Claude Code skill)
 

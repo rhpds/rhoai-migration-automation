@@ -120,7 +120,7 @@ oc start-build rstudio-server-rhel9 -n redhat-ods-applications --follow
 oc start-build cuda-rstudio-server-rhel9 -n redhat-ods-applications --follow
 ```
 
-Plan separately: building RStudio for the first time on a customer cluster usually needs the cluster admin to attach a RHEL entitlement to the cluster, which is its own ticket.
+Plan separately: building RStudio for the first time usually needs the cluster admin to attach a RHEL entitlement to the cluster, which is its own ticket.
 
 #### GPU workbench using a sha256 digest
 

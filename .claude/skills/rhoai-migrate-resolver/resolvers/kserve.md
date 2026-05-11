@@ -127,7 +127,7 @@ oc get isvc -A -o json | jq -r '
 '
 ```
 
-Real-world counts: a real customer pre-prod cluster had 1 stale ISVC (608 days old) + 3 stale multi-model ServingRuntimes (208–666 days old) that all needed deleting before upgrade — none were active workloads, just forgotten test resources. Delete with `oc delete isvc <name> -n <ns>` and `oc delete servingruntime <name> -n <ns>`.
+Real-world counts: long-lived 2.x clusters often carry forgotten ModelMesh test resources from years prior — 1 stale ISVC and 3 multi-model ServingRuntimes 200+ days old is a typical sweep result, sometimes older. None are active workloads, but the deprecated CRDs need clearing before upgrade. Delete with `oc delete isvc <name> -n <ns>` and `oc delete servingruntime <name> -n <ns>`.
 
 > **Don't confuse v1alpha1 ServingRuntime with ModelMesh.** Several KServe single-model ServingRuntimes (`multiModel: false`) ship at `serving.kserve.io/v1alpha1` — that's just the API version, not a sign of ModelMesh. They're safe to leave untouched. The only signal for ModelMesh is `spec.multiModel: true`.
 

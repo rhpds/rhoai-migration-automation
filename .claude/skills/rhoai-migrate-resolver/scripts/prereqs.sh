@@ -112,7 +112,7 @@ else
 fi
 
 # 7. Backup advisory — we can't verify, so remind
-check WARN "cluster backup" "in-place migration requires a verified backup (architectural-changes.md § In-Place Migration)"
+check WARN "cluster backup" "verified backup is mandatory for in-place migration — see BACKUP-RESTORE.md (Layer 1 etcd + Layer 2 OADP) and skills/.../resolvers/backup.md"
 
 echo
 echo "==================================================="

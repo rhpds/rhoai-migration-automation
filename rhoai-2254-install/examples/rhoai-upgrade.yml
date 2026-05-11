@@ -140,7 +140,7 @@ results:
     kind: DataSciencePipelinesApplication
     metadata:
       name: dspa
-      namespace: sl-fuelpilot-dataplatform
+      namespace: ml-pipelines-example
   kind: datasciencepipelines
   name: instructlab-removal
   spec:

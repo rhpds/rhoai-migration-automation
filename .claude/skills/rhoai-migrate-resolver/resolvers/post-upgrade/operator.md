@@ -63,7 +63,7 @@ Kueue features can be re-enabled post-upgrade via the Red Hat Build of Kueue ope
 
 **Cause:** the RHOAI 3.x GatewayConfig reconciler creates a NetworkPolicy in the `openshift-ingress` namespace to allow ingress traffic to `data-science-gateway`. On clusters with an SRE-managed admission webhook (typical name: `sre-networkpolicies-validation`) restricting NetworkPolicy creation in `openshift-*` namespaces, that POST gets rejected → GatewayConfig sits Not Ready forever.
 
-This was hit on **both** the dev cluster and the pre-prod cluster. It's reproducible enough to call a known issue rather than environment-specific.
+This has been observed on multiple managed-OpenShift clusters with SRE-managed admission webhooks. Reproducible enough to call a known issue rather than environment-specific — if your cluster has any webhook restricting NetworkPolicy creation in `openshift-*` namespaces, expect to need this fix.
 
 **Fix:** disable the operator-managed NetworkPolicy for the GatewayConfig. The cluster's ingress isolation continues to be enforced by whatever the SRE webhook set up; you're just opting RHOAI out of also writing one.
 

@@ -117,12 +117,12 @@ oc delete namespace knative-serving --ignore-not-found
 
 **Cause:** in tightly-controlled environments, namespaces hosting models often have a NetworkPolicy (commonly named `internal-1`) that allows ingress only from a specific router shard pod selector — for example, `internal-router-shard`. RHOAI 3.x creates ISVC routes against the **default** router (and the data-science-gateway's HTTPRoute attaches there), so traffic from the default router pods gets dropped by the NetworkPolicy and the user sees a 503.
 
-This was hit on the pre-prod cluster in two namespaces (`llmaas--runtime-int`, `xe-support-ai--models`). Diagnose by listing NetworkPolicies in any 503-affected namespace and inspecting the `from` selector.
+This is a common post-upgrade finding on clusters with namespace-scoped router-shard isolation; it can affect any number of model-hosting namespaces. Diagnose by listing NetworkPolicies in any 503-affected namespace and inspecting the `from` selector.
 
 **Fix:** broaden the `from` selector to match the `openshift-ingress` namespace (which contains both the default router and the data-science-gateway), instead of pinning to a specific router pod label:
 
 ```
-NS=<isvc-namespace>   # e.g. llmaas--runtime-int
+NS=<isvc-namespace>
 oc patch networkpolicy internal-1 -n "$NS" --type=json \
   -p='[{"op":"replace","path":"/spec/ingress/0/from/0","value":{"namespaceSelector":{"matchLabels":{"name":"openshift-ingress"}}}}]'
 ```
