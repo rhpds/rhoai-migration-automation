@@ -116,6 +116,8 @@ oc get csv -n openshift-adp -w
 
 Replace `<bucket>`, `<region>`, and credential values with your real off-cluster S3 settings.
 
+> **Use CSI snapshots, not kopia/restic, for RHOAI workbench PVCs.** Workbenches are managed by Kubeflow as StatefulSets. When Velero restores a Pod from a kopia-style filesystem backup it injects a `restore-wait` init container that copies data from the node-agent into the new PVC. The StatefulSet controller treats the restored Pod as drifted from its template, deletes it, and creates a fresh Pod *without* the init container — so the PVC is left empty even though the backup itself completed cleanly. This was confirmed on a 2.25.4 rehearsal: PVB phase=Completed, PVC content gone. Use CSI volume snapshots with the DataMover (`snapshotMoveData: true`) instead — the snapshot is taken at the volume level, independent of pods, so the StatefulSet recreation doesn't matter. This requires a `VolumeSnapshotClass` for your CSI driver labeled `velero.io/csi-volumesnapshot-class=true`. On AWS gp3 that means labeling the existing `csi-aws-vsc` class.
+
 ```sh
 # Cloud credentials secret (OADP expects it under the key `cloud`)
 cat > /tmp/credentials-velero <<EOF
@@ -139,10 +141,10 @@ spec:
       defaultPlugins:
         - openshift
         - aws
-        - csi    # only include if your StorageClass supports CSI snapshots
+        - csi
     nodeAgent:
       enable: true
-      uploaderType: kopia    # filesystem-level backup; works with any RWO PVC
+      uploaderType: kopia    # DataMover uses kopia to upload CSI snapshots to object storage
   backupLocations:
     - name: default
       velero:
@@ -166,6 +168,16 @@ Verify the BackupStorageLocation reaches `Available`:
 ```sh
 oc get backupstoragelocation -n openshift-adp
 # expect: PHASE=Available
+```
+
+Label the CSI VolumeSnapshotClass so Velero picks it up:
+
+```sh
+# AWS gp3 example — find your driver's class first
+oc get volumesnapshotclass
+
+# Label it for Velero (skip if already labeled)
+oc label volumesnapshotclass csi-aws-vsc velero.io/csi-volumesnapshot-class=true --overwrite
 ```
 
 ### Discover RHOAI workload namespaces
@@ -242,7 +254,9 @@ $NS_LIST
   includedResources:
     - "*"
   includeClusterResources: false
-  defaultVolumesToFsBackup: true       # filesystem-level — works on any RWO PVC
+  defaultVolumesToFsBackup: false      # use CSI snapshot, not kopia fs-backup
+  snapshotMoveData: true               # DataMover uploads the snapshot to the BSL
+  csiSnapshotTimeout: 10m
   storageLocation: default
   ttl: 720h                            # backup expires in 30 days
 EOF
@@ -259,24 +273,27 @@ oc get backup -n openshift-adp "$NAME" -o jsonpath='phase={.status.phase} errors
 oc describe backup -n openshift-adp "$NAME" | grep -E 'Phase|Errors|Warnings|Total Items|Items Backed Up'
 ```
 
-`Phase=Completed` with `Errors=0` and a non-zero `Items Backed Up` is the green light. **Confirm PVC contents are actually in the backup** before declaring it usable:
+`Phase=Completed` with `Errors=0` and a non-zero `Items Backed Up` is the green light. **Confirm the CSI snapshot data made it off-cluster** before declaring the backup usable:
 
 ```sh
-oc get podvolumebackup -n openshift-adp -l velero.io/backup-name="$NAME" \
-  -o custom-columns='POD:.spec.pod,PVC:.spec.volume,PHASE:.status.phase,BYTES:.status.progress.bytesDone'
+# DataUploads — one per backed-up PVC, written by the DataMover from the CSI snapshot
+oc get datauploads.velero.io -n openshift-adp \
+  -o custom-columns='NAME:.metadata.name,PHASE:.status.phase,BYTES:.status.progress.bytesDone,SC:.spec.snapshot.csi.snapshotClass'
 ```
 
-Every PodVolumeBackup row should show `PHASE=Completed` with a non-zero `BYTES`.
+Every DataUpload row should show `PHASE=Completed` with a non-zero `BYTES`.
 
 If the backup is `PartiallyFailed`:
 
 ```sh
 oc logs -n openshift-adp -l app.kubernetes.io/name=velero --tail=200 | grep -i error
-oc get podvolumebackup -n openshift-adp \
-  -o custom-columns='NAME:.metadata.name,PHASE:.status.phase,PVC:.spec.pod' | grep -v Completed
+oc get datauploads.velero.io -n openshift-adp \
+  -o custom-columns='NAME:.metadata.name,PHASE:.status.phase' | grep -v Completed
 ```
 
-Common causes: a PVC's pod isn't running (filesystem backup needs the pod scheduled to read its files), or the StorageClass doesn't support CSI snapshots and you're using `defaultVolumesToFsBackup: false`. Stick with `defaultVolumesToFsBackup: true` for filesystem-level backup; it works on any `ReadWriteOnce` PVC.
+Common causes: the StorageClass's CSI driver doesn't support snapshots (check that a `VolumeSnapshotClass` exists for it), or the `VolumeSnapshotClass` isn't labeled `velero.io/csi-volumesnapshot-class=true` so Velero can't find it, or the DataMover pod can't reach the BSL endpoint.
+
+> **Why not `defaultVolumesToFsBackup: true`?** Kopia/restic filesystem-level backup *does* complete cleanly — the PodVolumeBackup rows show `Completed` with non-zero bytes — but on restore, the StatefulSet controller deletes the Velero-injected Pod and recreates it from its own template without the `restore-wait` init container. The PVC ends up empty. This is a hard limitation of pod-level filesystem backup when the pods are managed by a controller that enforces template parity; CSI snapshots avoid the problem entirely because they're taken at the volume layer.
 
 ## Layer 3 — rhai-cli helper artefacts (during migration only)
 
@@ -338,7 +355,16 @@ oc get restore -n openshift-adp ${NAME}-restore -w
 oc get all,pvc -n ml-project-a
 ```
 
-PVC contents are restored from the filesystem backup taken with `defaultVolumesToFsBackup: true`. Pods will recreate when their owning resources (Notebook, ISVC, etc.) reconcile.
+PVC contents are restored from the CSI snapshot. Watch the DataDownload to confirm the volume data is being copied back from the BSL before declaring the restore done:
+
+```sh
+oc get datadownloads.velero.io -n openshift-adp -l velero.io/restore-name=${NAME}-restore \
+  -o custom-columns='NAME:.metadata.name,PHASE:.status.phase,BYTES:.status.progress.bytesDone'
+```
+
+Once `PHASE=Completed` with non-zero bytes for every PVC, the pods will recreate when their owning resources (Notebook, ISVC, etc.) reconcile and will mount PVCs populated with the snapshot data.
+
+> **Pre-restore note for autoscaling clusters.** On a cluster that auto-scales worker nodes (RHDP sandboxes, AWS managed pools), give the cluster a moment after the restore is applied: if the restore lands on a brand-new worker node, the node-agent daemonset can take a few seconds to schedule there. Velero's restore timeout for pod-volume operations is 4h by default, so a slow node-agent rollout is recoverable — but if the DataDownload pod itself is scheduled before its node-agent peer is Running, the restore will sit in `WaitingForPluginOperations`. Re-check `oc get nodes -o wide` and `oc -n openshift-adp get pods -l name=node-agent` if a restore appears stuck.
 
 ### Scenario B — restore the whole cluster (Layer 1 / etcd)
 

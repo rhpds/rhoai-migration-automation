@@ -55,19 +55,21 @@ oc get csv -n openshift-adp 2>/dev/null | grep oadp-operator
 oc get backup -n openshift-adp -o custom-columns='NAME:.metadata.name,PHASE:.status.phase,ERRORS:.status.errors,WARNINGS:.status.warnings,STARTED:.status.startTimestamp' \
   | tail -5
 
-# PVC content actually present (not just resource YAMLs)
+# PVC content actually moved off-cluster (CSI snapshot + DataMover)
 NAME=<latest backup name>
-oc get podvolumebackup -n openshift-adp -l velero.io/backup-name="$NAME" \
-  -o custom-columns='POD:.spec.pod,PVC:.spec.volume,PHASE:.status.phase,BYTES:.status.progress.bytesDone'
+oc get datauploads.velero.io -n openshift-adp -l velero.io/backup-name="$NAME" \
+  -o custom-columns='NAME:.metadata.name,PHASE:.status.phase,BYTES:.status.progress.bytesDone'
 ```
 
 Pass criteria for the latest backup:
 
 - `PHASE=Completed`
 - `ERRORS=0`
-- Every PodVolumeBackup row shows `PHASE=Completed` with `BYTES>0`
+- Every DataUpload row shows `PHASE=Completed` with `BYTES>0`
 
-If any row is `PartiallyFailed` or has `BYTES=0`, the PVC contents are not actually in the backup. Re-run after fixing the underlying issue (most common cause: the PVC's pod isn't scheduled — filesystem backup needs the pod running to read its files).
+If any DataUpload is `Failed` or has `BYTES=0`, the PVC content didn't make it to the BSL. Most common causes: missing `VolumeSnapshotClass` for the storage driver, or the snapshot class isn't labeled `velero.io/csi-volumesnapshot-class=true`.
+
+> **Important — do NOT trust PodVolumeBackup phase=Completed alone.** RHOAI workbenches are managed as StatefulSets. With `defaultVolumesToFsBackup: true` the kopia-style filesystem backup completes cleanly and the PodVolumeBackup shows non-zero bytes, but on restore the StatefulSet controller deletes the Velero-injected Pod (the one carrying the `restore-wait` init container) and recreates it from its template — leaving the PVC empty. The supported approach is CSI snapshot + DataMover (`defaultVolumesToFsBackup: false`, `snapshotMoveData: true`); see [BACKUP-RESTORE.md](../../../../BACKUP-RESTORE.md) for the DPA + Backup CR shape that was validated end-to-end on a 2.25.4 rehearsal cluster.
 
 ### Namespace discovery sanity check
 
