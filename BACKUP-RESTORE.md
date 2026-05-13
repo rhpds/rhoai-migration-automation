@@ -25,7 +25,7 @@ For migration rehearsals, **Layers 1 + 2 are the baseline**: Layer 1 alone resto
 
 - A 2.25 cluster deployed via [rhoai-2254-install/install.sh](rhoai-2254-install/install.sh) (or any RHOAI 2.25.x cluster).
 - `oc whoami` returns a user with cluster-admin.
-- For Layer 2 (OADP): an off-cluster S3-compatible bucket. AWS S3, Ceph RGW, MinIO running outside the test cluster, or a NooBaa instance on a different cluster all work. **Never** point OADP at storage inside the cluster you're backing up — if the cluster dies, the backups die with it.
+- For Layer 2 (OADP): an off-cluster S3-compatible bucket. AWS S3, Ceph RGW, MinIO running outside the test cluster, or a NooBaa instance on a different cluster all work. **Never** point OADP at storage inside the cluster you're backing up — if the cluster dies, the backups die with it. **Cross-cluster verification:** the target cluster's `node-agent` pods must be able to reach the BSL endpoint. Confirm with a one-off `curl` from a pod on the target before trusting that a backup is portable.
 - ~30 min for the first-time backup, ~15–20 min for a restore drill.
 
 ## Layer 1 — etcd snapshot
@@ -237,6 +237,21 @@ sort -u -o /tmp/rhoai-backup-namespaces.txt /tmp/rhoai-backup-namespaces.txt
 
 Review `/tmp/rhoai-backup-namespaces.txt` and remove any namespaces you don't want backed up before proceeding. The list typically also picks up the operator-namespace cluster-scoped instances (`rhoai-model-registries`, etc.) — that's fine, OADP backs them up as namespaces too.
 
+### Pre-backup: flush the page cache (for non-DB workloads)
+
+CSI snapshots are block-level. Writes that are still in the kernel page cache when the snapshot is taken **will not be in the snapshot**. Databases (mariadb, postgres) use `fsync` on commit so their durable state is on disk by the time you snapshot — but arbitrary file writes from inside a notebook or `oc cp`'d data may not be. Run `sync` in each pod whose PVC you're about to back up:
+
+```sh
+# For every pod whose PVC is in scope for the backup
+for ns in $(cat /tmp/rhoai-backup-namespaces.txt); do
+  for pod in $(oc -n "$ns" get pods -o name 2>/dev/null); do
+    oc -n "$ns" exec "${pod#pod/}" -- sync 2>/dev/null || true
+  done
+done
+```
+
+This was confirmed by the cross-cluster rehearsal: a marker file written without `sync` was missing from the restored PVC even though the DataUpload completed cleanly; the same file with `sync` between the write and the backup restored cleanly with matching sha256.
+
 ### Take the backup
 
 ```sh
@@ -365,6 +380,43 @@ oc get datadownloads.velero.io -n openshift-adp -l velero.io/restore-name=${NAME
 Once `PHASE=Completed` with non-zero bytes for every PVC, the pods will recreate when their owning resources (Notebook, ISVC, etc.) reconcile and will mount PVCs populated with the snapshot data.
 
 > **Pre-restore note for autoscaling clusters.** On a cluster that auto-scales worker nodes (RHDP sandboxes, AWS managed pools), give the cluster a moment after the restore is applied: if the restore lands on a brand-new worker node, the node-agent daemonset can take a few seconds to schedule there. Velero's restore timeout for pod-volume operations is 4h by default, so a slow node-agent rollout is recoverable — but if the DataDownload pod itself is scheduled before its node-agent peer is Running, the restore will sit in `WaitingForPluginOperations`. Re-check `oc get nodes -o wide` and `oc -n openshift-adp get pods -l name=node-agent` if a restore appears stuck.
+
+> **Cross-cluster restore timing.** When restoring on a *different* cluster from the one that took the backup, wait 30–60s after the source-side backup shows `Phase=Completed` before applying the Restore on the target. The target's BackupSyncController lists the new backup in MinIO quickly but takes additional time to fully reconcile it; applying the Restore CR in that window fails validation with `Backup not found`. Also expect the DataDownload to sit at `phase: Accepted` for several minutes before transitioning — this can look like a hang for the first 5–10 minutes but is the normal path on cross-cluster restores. Cross-cluster restore was validated end-to-end in this repo's rehearsal for Deployment-managed PVCs (mariadb, 258 MB) with checksum-verified marker files restored on a fresh target cluster.
+
+### Workbench (StatefulSet) PVC restore — separate procedure
+
+Restoring a Kubeflow Notebook (StatefulSet-managed) PVC into a namespace where the SS controller is active produces an empty PVC, regardless of whether the source backup used kopia or CSI snapshot + DataMover. Both restore mechanisms inject Velero machinery that the SS controller then deletes during template reconciliation. **Workaround validated in the rehearsal:** restore the PVC into a *scratch namespace* with no StatefulSet, mount it in a probe pod to verify (or extract) the data, then move it into the real workbench namespace via a one-shot copy pod once the Notebook there is recreated. Example:
+
+```sh
+# 1. Restore only the PVC (and its namespace) — no Notebook, no SS, no Pod
+cat <<EOF | oc apply -f -
+apiVersion: velero.io/v1
+kind: Restore
+metadata:
+  name: workbench-pvc-only-restore
+  namespace: openshift-adp
+spec:
+  backupName: $NAME
+  includedNamespaces:
+    - workbenches-hwp
+  includedResources:
+    - persistentvolumeclaims
+    - namespaces
+  namespaceMapping:
+    workbenches-hwp: workbench-restore-scratch
+  restorePVs: true
+EOF
+
+# 2. Mount the restored PVC in a probe pod (no SS in the way)
+oc -n workbench-restore-scratch run probe \
+  --image=registry.access.redhat.com/ubi9/ubi-minimal:latest \
+  --restart=Never -- sleep 3600
+# patch the pod to mount the PVC, then `oc rsync` the files out
+
+# 3. Recreate the Notebook in its real home namespace, then copy data back in
+```
+
+This pattern was validated cross-cluster on dspa-sample's mariadb (Deployment-managed) for the "scratch namespace + probe pod" mechanic. Apply the same shape to workbench PVCs.
 
 ### Scenario B — restore the whole cluster (Layer 1 / etcd)
 
