@@ -8,7 +8,9 @@
 >
 > — architectural-changes.md § *Workload Scheduling: Kueue Transition*
 
-RHOAI 2.25 deprecated the embedded Kueue distribution; RHOAI 3.3 removes it. If the DSC still manages the old Kueue at upgrade time, the RHOAI operator reconciler loops fighting against resources the new stack expects, corrupting the DSC status. After migration, Kueue features can be re-enabled via the **Red Hat Build of Kueue** (RHBoK) operator — but that's a post-upgrade step.
+RHOAI 2.25 deprecated the embedded Kueue distribution; RHOAI 3.3 removes it. The failure mode if Kueue is left `Managed` at upgrade time is **cluster-wide, not RHOAI-scoped**: the Kueue admission webhook intercepts Job creation across every namespace. During the OLM-managed operator upgrade, the running webhook server and the new Kueue CRDs fall out of schema-version sync, and the webhook then rejects or mangles Job submissions for any workload on the cluster — RHOAI or otherwise. That includes OLM bundle unpacks, image builds, CronJobs, and other tenants' batch workloads. The only documented recovery once this is in progress is an etcd restore (see [BACKUP-RESTORE.md](../../../../BACKUP-RESTORE.md) Scenario B). After migration, Kueue features can be re-enabled via the **Red Hat Build of Kueue** (RHBoK) operator — but that's a post-upgrade step.
+
+**Upstream fix tracking:** RHOAIENG-48690 (root cause — Closed), RHOAIENG-52872 (webhook fix re-enable — Unassigned at the time of writing), RHAISTRAT-1711 (overall strategy: 2.25.x webhook backport + 3.5 top-level Kueue integration for InferenceService / LLMInferenceService / Notebooks). Until the 2.25.x backport ships, the manual `Removed` step below is the only safeguard.
 
 ## Preserve your queue frameworks (optional but recommended)
 
@@ -50,6 +52,7 @@ oc get pods -n redhat-ods-applications -l app.kubernetes.io/name=kueue
 
 - **Do not** skip directly to uninstalling the Red Hat Build of Kueue if you have it installed separately — that's for external users. The `Removed` state above handles only the RHOAI-embedded Kueue.
 - If you had embedded Kueue (`Managed`), migrating to the external Red Hat Build of Kueue is a separate pre-migration step and involves switching `managementState` to `Unmanaged` first, installing the external operator, then setting `Removed`. See migration guide §2.2 for the exact sequence.
+- **Known edge case — RHOAIENG-61489 (New):** the `Managed → Unmanaged` transition can stall. If you're using the `Managed → Unmanaged → install RHBoK → Removed` sequence rather than going straight to `Removed`, re-run the Verify block above and confirm the DSC `KueueReady` condition has settled before installing RHBoK. If `Unmanaged` won't complete, opening a support case is safer than proceeding.
 
 ## After
 

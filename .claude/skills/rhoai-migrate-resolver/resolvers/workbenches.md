@@ -163,16 +163,23 @@ Both remain functional after the 3.3.2 upgrade. The migration just bumps the ope
 **rhai-cli signal:** `workload / notebook / stopped`.
 
 ```
-# Survey which are running
-oc get notebooks -A -o custom-columns='NS:.metadata.namespace,NAME:.metadata.name,STOPPED:.metadata.annotations.kubeflow-resource-stopped'
+# Survey which are running — by pod count, not annotation (see Verify note below)
+for nb in $(oc get notebooks -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}'); do
+  ns="${nb%/*}"; name="${nb##*/}"
+  pods=$(oc -n "$ns" get pods -l notebook-name="$name" --no-headers 2>/dev/null | wc -l | tr -d ' ')
+  [ "$pods" -gt 0 ] && echo "$nb has $pods pod(s) running"
+done
 
-# Stop one
+# Stop one — set the annotation to an ISO timestamp (this is what the dashboard does)
 NS=<namespace>; NAME=<notebook>
-oc annotate notebook "$NAME" -n "$NS" kubeflow-resource-stopped=true --overwrite
+oc annotate notebook "$NAME" -n "$NS" \
+  kubeflow-resource-stopped="$(date -u +%Y-%m-%dT%H:%M:%SZ)" --overwrite
 
 # Stop all (be sure — this disconnects active users)
+STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 for row in $(oc get notebooks -A --no-headers | awk '{print $1"/"$2}'); do
-  oc annotate notebook "${row##*/}" -n "${row%%/*}" kubeflow-resource-stopped=true --overwrite
+  oc annotate notebook "${row##*/}" -n "${row%%/*}" \
+    kubeflow-resource-stopped="$STAMP" --overwrite
 done
 ```
 
@@ -180,11 +187,24 @@ Expect to do this in the maintenance window itself, not earlier — users will l
 
 ## Verify
 
+The notebook controller treats `kubeflow-resource-stopped` as "stopped if present and non-empty" — the dashboard sets it to an ISO timestamp, not the literal `"true"`. Filters that check for `== "true"` will report stopped notebooks as still running. The reliable check is **pod count**:
+
 ```
-# No workbenches still running
-oc get notebooks -A -o json \
-  | jq -r '.items[] | select((.metadata.annotations."kubeflow-resource-stopped" // "false") != "true") | "\(.metadata.namespace)/\(.metadata.name)"'
+# No workbenches still running — pod-count gate (the rhai-cli check uses this signal too)
+for nb in $(oc get notebooks -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}'); do
+  ns="${nb%/*}"; name="${nb##*/}"
+  pods=$(oc -n "$ns" get pods -l notebook-name="$name" --no-headers 2>/dev/null | wc -l | tr -d ' ')
+  [ "$pods" -gt 0 ] && echo "$nb still has $pods pod(s)"
+done
 # empty output = all stopped
+```
+
+For the annotation-only check (faster but blind to "annotation missing entirely yet pod is gone" cases):
+
+```
+oc get notebooks -A -o json \
+  | jq -r '.items[] | select((.metadata.annotations."kubeflow-resource-stopped" // "") == "") | "\(.metadata.namespace)/\(.metadata.name)"'
+# empty output = all stopped via annotation
 ```
 
 ## After

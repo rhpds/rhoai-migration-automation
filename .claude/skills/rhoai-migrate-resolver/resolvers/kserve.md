@@ -260,7 +260,13 @@ oc delete namespace openshift-serverless --ignore-not-found
 # Delete the SMCP (if not already gone from the DSCI change above)
 oc delete servicemeshcontrolplane data-science-smcp -n istio-system --ignore-not-found
 
-# Uninstall operator
+# Delete any leftover SMMR — DSCI's serviceMesh=Removed deletes the SMCP but does NOT
+# delete the SMMR; it lingers with a maistra.io/istio-operator finalizer and is invisible
+# to the upgrade until you trigger it explicitly. Do this WHILE the SM v2 operator is
+# still installed so the operator can process the finalizer:
+oc delete smmr -n istio-system default --ignore-not-found
+
+# Uninstall operator (SMMR must be gone first or this hangs)
 oc get subscription -n openshift-operators servicemeshoperator -o jsonpath='{.status.installedCSV}{"\n"}' \
   | xargs -I{} oc delete csv {} -n openshift-operators --ignore-not-found
 oc delete subscription servicemeshoperator -n openshift-operators --ignore-not-found
@@ -269,6 +275,8 @@ oc delete subscription servicemeshoperator -n openshift-operators --ignore-not-f
 oc delete subscription kiali-ossm -n openshift-operators --ignore-not-found
 oc delete subscription jaeger-product -n openshift-operators --ignore-not-found
 ```
+
+> The SM v2 operator pod (named `istio-operator-*`) runs in `openshift-operators`, not in `istio-system`. The `istio-system` namespace only hosts the SMCP-controlled workloads (Galley, Pilot, ingress/egress gateways) — when the SMCP is gone, that namespace empties out but the operator that processes finalizers is still alive elsewhere. Order matters: SMMR delete → SMMR finalizer fires → operator uninstall.
 
 ---
 

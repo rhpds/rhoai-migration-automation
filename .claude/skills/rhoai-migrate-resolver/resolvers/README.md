@@ -109,3 +109,21 @@ When walking the user through results, sequence the resolvers so that dependenci
 8. **llm-isvc.md** — pin templates last, just before the upgrade
 
 Re-run `rhai-cli lint` between major phases — some checks only activate once prior items are done (e.g. the DSCI `serviceMesh` check doesn't fire until Serverless ISVCs are gone).
+
+## After the resolvers — what the actual upgrade looks like
+
+The resolvers stop at "pre-upgrade clean." The upgrade itself is two steps in the migration guide, but with a wrinkle worth knowing in advance:
+
+1. **Channel switch.** `oc -n redhat-ods-operator patch subscription rhods-operator --type=merge -p '{"spec":{"channel":"support-required-upgrade"}}'` — the channel name is intentionally verbose to prevent accidental triggers and is the same on every 2.25.x → 3.3.x migration. Confirm the current channel first (`oc -n redhat-ods-operator get subscription rhods-operator -o jsonpath='{.spec.channel}'`); typical pre-state is `stable-2.25`.
+
+2. **OLM walks the upgrade graph one CSV at a time — not in a single jump.** Even though `support-required-upgrade`'s `currentCSV` is `rhods-operator.3.3.2`, OLM walks the `replaces` chain. From a cluster on `2.25.4` you'll see two unapproved InstallPlans in sequence: first `2.25.4 → 2.25.6`, then `2.25.6 → 3.3.2`. Both require manual approval because the migration channel uses `installPlanApproval: Manual`. Approve the first, wait for `Succeeded`, then the second appears.
+
+   ```
+   # Approve whichever InstallPlan is currently unapproved
+   IP=$(oc -n redhat-ods-operator get installplan -o json | jq -r '.items[] | select(.spec.approved==false) | .metadata.name' | head -1)
+   oc -n redhat-ods-operator patch installplan "$IP" --type=merge -p '{"spec":{"approved":true}}'
+   ```
+
+3. **Schema rename happens during the 3.3.2 reconciliation.** `.spec.components.datasciencepipelines` becomes `.spec.components.aipipelines`; new fields `trainer` and `mlflowoperator` appear (both default to `Removed`). HardwareProfiles auto-migrate from `dashboard.opendatahub.io/v1alpha1` to `infrastructure.opendatahub.io` with **renamed objects** (e.g., `large-notebooks-17kpw` → `containersize-large-notebooks`) — any user automation referencing the old names breaks here. The lint's `hardwareprofile-migration` advisory is the warning sign before the upgrade.
+
+After step 3 reports `phase=Succeeded` + DSC `Ready`, run [post-upgrade/workbenches.md](post-upgrade/workbenches.md) to patch workbenches off the 2.x oauth-proxy auth model. The rest of the post-upgrade resolvers are component-specific (see [post-upgrade/README.md](post-upgrade/README.md)).
