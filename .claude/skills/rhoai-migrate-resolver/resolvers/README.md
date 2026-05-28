@@ -126,4 +126,13 @@ The resolvers stop at "pre-upgrade clean." The upgrade itself is two steps in th
 
 3. **Schema rename happens during the 3.3.2 reconciliation.** `.spec.components.datasciencepipelines` becomes `.spec.components.aipipelines`; new fields `trainer` and `mlflowoperator` appear (both default to `Removed`). HardwareProfiles auto-migrate from `dashboard.opendatahub.io/v1alpha1` to `infrastructure.opendatahub.io` with **renamed objects** (e.g., `large-notebooks-17kpw` → `containersize-large-notebooks`) — any user automation referencing the old names breaks here. The lint's `hardwareprofile-migration` advisory is the warning sign before the upgrade.
 
-After step 3 reports `phase=Succeeded` + DSC `Ready`, run [post-upgrade/workbenches.md](post-upgrade/workbenches.md) to patch workbenches off the 2.x oauth-proxy auth model. The rest of the post-upgrade resolvers are component-specific (see [post-upgrade/README.md](post-upgrade/README.md)).
+4. **Switch off the migration channel once you're on 3.3.2.** `support-required-upgrade` is a one-shot trigger channel — it does not advance to later 3.3.x patch releases. Leaving the subscription there means no ongoing z-stream updates. After the upgrade completes, move to the stable 3.3 channel so the cluster receives 3.3.x patches:
+
+   ```
+   oc patch subscription rhods-operator -n redhat-ods-operator --type=merge \
+     -p '{"spec":{"channel":"stable-3.3"}}'
+   ```
+
+   Pick `stable-3.3` (stays on the 3.3 z-stream) rather than `stable-3.x` (would eventually offer a 3.4 minor upgrade). See [post-upgrade/operator.md](post-upgrade/operator.md) § *Switch the subscription channel off the migration channel* for the full step + verification.
+
+After step 3 reports `phase=Succeeded` + DSC `Ready`, run [post-upgrade/workbenches.md](post-upgrade/workbenches.md) to patch workbenches off the 2.x oauth-proxy auth model, and do the channel switch in step 4. The rest of the post-upgrade resolvers are component-specific (see [post-upgrade/README.md](post-upgrade/README.md)).

@@ -32,6 +32,35 @@ oc get gatewayconfigs --all-namespaces -o wide
 # expect: default-gateway READY=True
 ```
 
+## Switch the subscription channel off the migration channel
+
+Once the upgrade is complete (CSV `rhods-operator.3.3.2` Succeeded, DSC + DSCI `Ready`), the subscription is still pointed at `support-required-upgrade` — the verbose, gated channel whose only job is to trigger the 2→3 migration. Leaving it there means **no ongoing z-stream updates**: the migration channel doesn't advance to 3.3.3, 3.3.4, etc. Move the subscription onto the stable 3.3 channel so the cluster receives 3.3.x patch releases normally.
+
+```
+# Confirm you're on 3.3.2 first
+oc get csv -n redhat-ods-operator -o jsonpath='{range .items[?(@.spec.displayName=="Red Hat OpenShift AI")]}{.metadata.name} {.status.phase}{"\n"}{end}'
+# expect: rhods-operator.3.3.2 Succeeded
+
+# See which channels the catalog offers (stable-3.3 stays on the 3.3 z-stream;
+# stable-3.x / fast-3.x would track forward into 3.4+)
+oc get packagemanifest rhods-operator -n openshift-marketplace \
+  -o jsonpath='{range .status.channels[*]}{.name}  {.currentCSV}{"\n"}{end}'
+
+# Switch to the stable 3.3 channel
+oc patch subscription rhods-operator -n redhat-ods-operator --type=merge \
+  -p '{"spec":{"channel":"stable-3.3"}}'
+```
+
+Verify:
+
+```
+oc get subscription rhods-operator -n redhat-ods-operator \
+  -o jsonpath='channel={.spec.channel}  state={.status.state}  installedCSV={.status.installedCSV}{"\n"}'
+# expect: channel=stable-3.3  state=AtLatestKnown  installedCSV=rhods-operator.3.3.2
+```
+
+> Keep `installPlanApproval: Manual` if the customer wants to gate future z-stream bumps; flip it to `Automatic` only if they want unattended patching. `stable-3.3` will surface 3.3.x patch InstallPlans; `stable-3.x` would eventually offer a 3.4 minor upgrade, which is a separate planning decision, not a patch — pick `stable-3.3` unless the customer explicitly wants to ride the latest minor.
+
 ## Kueue recovery (if pre-upgrade Kueue step was skipped)
 
 If `KueueReady=False` with message `Kueue managementState Managed is not supported, please use Removed or Unmanaged`:
