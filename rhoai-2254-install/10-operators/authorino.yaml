@@ -1,6 +1,6 @@
 ---
 # Standalone Authorino Operator (not Red Hat Connectivity Link).
-# Required by RHOAI 2.25.4 for KServe Serverless auth — replaced by RHCL during migration to 3.3.2.
+# Required by RHOAI 2.25.6 for KServe Serverless auth — replaced by RHCL during migration to 3.3.3.
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
 metadata:

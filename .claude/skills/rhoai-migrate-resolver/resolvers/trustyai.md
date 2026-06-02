@@ -31,43 +31,49 @@ List the TrustyAIServices so you know what to back up:
 oc get trustyaiservice -A -o custom-columns='NS:.metadata.namespace,NAME:.metadata.name,STORAGE:.spec.storage.format'
 ```
 
-## § Back up metrics
+## § Back up metrics (per §2.5.2 — no helper script)
 
-For each TrustyAIService, fetch the `/metrics/all/requests` JSON and save it. The rhai-cli container includes a helper:
+There is **no** `backup-metrics.sh` helper shipped with rhai-cli. Earlier revisions of this resolver invoked `backup_metrics.sh`; that command does not exist. Metrics are captured per-namespace with a manual port-forward + curl flow, exactly as written in guide §2.5.2.
 
-```
-oc exec -n rhai-migration rhai-cli-0 -- \
-  bash /opt/rhai-upgrade-helpers/trustyai/backup_metrics.sh
-```
-
-Output goes to `/tmp/rhoai-upgrade-backup/trustyai/trustyai-metrics-<NS>-<timestamp>.json`.
-
-## § Back up data storage
-
-Two paths depending on `spec.storage.format`:
-
-### PVC-backed (format: PVC)
-
-The helper copies everything from the TrustyAIService pod's `/inputs` directory into the backup PVC:
+For each namespace that has a TrustyAIService:
 
 ```
-oc exec -n rhai-migration rhai-cli-0 -- \
-  bash /opt/rhai-upgrade-helpers/trustyai/backup_storage.sh
+export NS=<namespace>
+export TAS_NAME=$(oc get trustyaiservice -n "$NS" -o jsonpath='{.items[0].metadata.name}')
+export SVC_PORT=$(oc get svc -n "$NS" "$TAS_NAME" -o jsonpath='{.spec.ports[?(@.name=="http")].port}')
+
+# If $SVC_PORT is empty, pick the http port manually from:
+#   oc get svc -n "$NS" "$TAS_NAME" -o jsonpath='{range .spec.ports[*]}{.name}:{.port}{"\n"}{end}'
+
+oc port-forward -n "$NS" "svc/$TAS_NAME" 8080:${SVC_PORT} &
+export PF_PID=$!; sleep 3
+
+curl -sk -H "Authorization: Bearer $(oc whoami -t)" \
+  "http://localhost:8080/metrics/all/requests" \
+  -o "${BACKUP_DIR}/trustyai-metrics-${NS}-$(date +%Y%m%d-%H%M%S).json"
+
+kill $PF_PID 2>/dev/null
 ```
 
-Result: `/tmp/rhoai-upgrade-backup/trustyai/trustyai-data-<namespace>-<timestamp>/data/*.csv`.
+Verify: `jq empty ${BACKUP_DIR}/trustyai-metrics-${NS}-*.json && echo OK`
 
-### DATABASE-backed (format: DATABASE)
+## § Back up data storage (per §2.5.3 — `backup-data.sh`)
 
-The helper invokes `mysqldump` against the MariaDB referenced by the `databaseConfigurations` Secret:
+The helper script's name is `backup-data.sh` (hyphen). Earlier revisions of this resolver called it `backup_storage.sh`; that path does not exist. The script auto-detects PVC vs DATABASE-backed services per TrustyAIService.
 
 ```
-# Same helper — auto-detects format per TrustyAIService
-oc exec -n rhai-migration rhai-cli-0 -- \
-  bash /opt/rhai-upgrade-helpers/trustyai/backup_storage.sh
+oc exec -n rhai-migration rhai-cli-0 -- bash -c '
+  cd /opt/rhai-upgrade-helpers/trustyai
+  ./backup-data.sh --namespace <namespace>
+'
 ```
 
-Result: `/tmp/rhoai-upgrade-backup/trustyai/trustyai-db-<namespace>-<timestamp>/dump.sql`.
+Results:
+
+- **PVC:** `/tmp/rhoai-upgrade-backup/trustyai/trustyai-data-<namespace>-<timestamp>/data/*.csv`
+- **DATABASE:** `/tmp/rhoai-upgrade-backup/trustyai/trustyai-db-<namespace>-<timestamp>/dump.sql`
+
+> The `cannot use rsync: rsync not available in container` warning the guide describes (§2.5.3) is expected — `oc rsync` falls back to `tar`. Backup completes successfully regardless.
 
 ## § Guardrails — back up OpenTelemetry exporter config
 

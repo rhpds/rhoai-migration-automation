@@ -7,7 +7,7 @@ metadata:
     opendatahub.io/dashboard: "true"
     modelmesh-enabled: "false"
 ---
-# FeatureStore — Technology Preview in 2.25.4, GA in 3.3.2. Migration §2.4 verifies Ready state.
+# FeatureStore — Technology Preview in 2.25.4, GA in 3.3.3. Migration §2.4 verifies Ready state.
 apiVersion: feast.dev/v1alpha1
 kind: FeatureStore
 metadata:

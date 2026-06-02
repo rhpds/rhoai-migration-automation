@@ -14,16 +14,17 @@ This is the largest migration section. It covers every `component / kserve`, `co
 
 ## The migration sequence matters
 
-Do these in order. Skipping ahead leaves the cluster in a half-migrated state where the RHOAI operator reconciler fights against workloads.
+Per migration guide §2.8.3, in this order. Skipping ahead leaves the cluster in a half-migrated state where the RHOAI operator reconciler fights against workloads.
 
-1. Convert every Serverless `InferenceService` to RawDeployment
-2. Convert every ModelMesh `InferenceService` to RawDeployment (convert its multi-model `ServingRuntime` too)
-3. Verify InferenceServices are healthy on the new mode
-4. Update the `inferenceservice-config` ConfigMap (adds the hardware-profile ignorelist)
-5. Set `kserve.serving.managementState: Removed` on the DSC
-6. Set `modelmeshserving.managementState: Removed` on the DSC
-7. Set `serviceMesh.managementState: Removed` on the DSCI
-8. Uninstall the three operators: OpenShift Serverless, Service Mesh v2, standalone Authorino
+1. **Back up** the `inferenceservice-config` ConfigMap (§2.8.6)
+2. **Convert** every Serverless `InferenceService` to RawDeployment via `serverless-to-raw.sh` (§2.8.7.1)
+3. **Convert** every ModelMesh `InferenceService` to RawDeployment via `modelmesh-to-raw.sh`, including its multi-model `ServingRuntime` (§2.8.7.2)
+4. **Verify** InferenceServices are healthy on the new mode (§2.8.7.3)
+5. **Update** the `inferenceservice-config` ConfigMap with the hardware-profile ignorelist via `hardwareprofiles-ignorelist.sh` (§2.8.8)
+6. Set `kserve.serving.managementState: Removed` on the DSC (§2.8.9)
+7. Set `modelmeshserving.managementState: Removed` on the DSC
+8. Set `serviceMesh.managementState: Removed` on the DSCI
+9. Uninstall the three operators: OpenShift Serverless, Service Mesh v2, standalone Authorino
 
 Re-run `rhai-cli lint --checks "*kserve*" --checks "*modelmesh*"` after each major step.
 
@@ -33,45 +34,71 @@ Re-run `rhai-cli lint --checks "*kserve*" --checks "*modelmesh*"` after each maj
 
 **rhai-cli signal:** `workload / kserve / impacted-workloads` referencing Serverless ISVCs.
 
-Enumerate them first:
+Migration guide §2.8.7.1 ships `serverless-to-raw.sh` as the **official** conversion path. Earlier revisions of this resolver claimed no helper scripts exist in the shipped image — that was wrong. The helper is at `/opt/rhai-upgrade-helpers/model-serving/before-upgrade/serverless-to-raw.sh` inside the rhai-cli container.
+
+Enumerate first via rhai-cli (matches the guide's discovery step):
 
 ```
-oc get isvc -A -o json \
-  | jq -r '.items[] | select((.metadata.annotations."serving.kserve.io/deploymentMode" // "") == "Serverless" or (.status.deploymentMode // "") == "Serverless") | "\(.metadata.namespace)\t\(.metadata.name)"'
+oc exec -n rhai-migration rhai-cli-0 -- \
+  /opt/rhai-cli/bin/rhai-cli lint --target-version 3.3.2 --verbose \
+  --checks "*kserve*" --isvc-deployment-mode serverless
 ```
 
-> Note: earlier versions of this guide referenced `rhai-cli modelserving convert-to-raw` and `rhai-cli modelserving update-config` helpers. Those subcommands do **not** exist in the shipped `rhai-cli` image (v3.3.2 only exposes `lint`).
->
-> **Also: the KServe admission webhook refuses in-place `deploymentMode` changes** (`update rejected: deploymentMode cannot be changed from 'Serverless' to 'RawDeployment'`). So you cannot convert by annotation patch. You must **back up, delete, and recreate** the ISVC with the new annotation.
+Per namespace, dry-run then apply. The script is interactive — it has **two prompts** to step through:
 
-Per-ISVC procedure:
+1. *Selection prompt*: choose which ISVCs to migrate. Type `all` (or specific numbers like `1 3 5`).
+2. *Naming prompt*: option `1` for original names (in-place replacement) or `2` for `-raw` suffix (side-by-side). Choose `1` if the original name matters for downstream callers (workshop default); choose `2` if you want side-by-side validation before retiring the originals.
+
+```
+NS=<namespace>
+
+oc exec -n rhai-migration rhai-cli-0 -it -- \
+  /opt/rhai-upgrade-helpers/model-serving/before-upgrade/serverless-to-raw.sh \
+  --dry-run -n "$NS"
+
+# Once the dry-run looks right, apply for real. With option 1 (in-place),
+# pass --delete-existing so the script deletes the legacy ISVC + ServingRuntime
+# + auth resources + Istio route before applying the rewritten YAML:
+oc exec -n rhai-migration rhai-cli-0 -it -- \
+  /opt/rhai-upgrade-helpers/model-serving/before-upgrade/serverless-to-raw.sh \
+  --delete-existing -n "$NS"
+```
+
+Generated files land under `/tmp/rhoai-upgrade-backup/model-serving/serverless-to-raw/<isvc>/` inside the pod (an `original/` snapshot for rollback + a `raw-original-names/` rewrite). The script handles auth resources automatically based on the ISVC's `security.opendatahub.io/enable-auth` annotation.
+
+If you ran with option `2` (`-raw` suffix), the legacy resources are not touched by the script — delete them by hand once you're satisfied the `-raw` copies serve correctly (guide §2.8.7.1 step 5):
+
+```
+oc get isvc -n "$NS" -o json | jq -r '.items[]
+  | select(.status.deploymentMode == "Serverless"
+        or .metadata.annotations["serving.kserve.io/deploymentMode"] == "Serverless")
+  | .metadata.name' \
+  | while read -r name; do oc delete isvc "$name" -n "$NS"; done
+```
+
+### Fallback — manual recreate
+
+Only if the helper script is unavailable or fails on a workload it can't handle. The KServe admission webhook refuses in-place `deploymentMode` changes (`update rejected: deploymentMode cannot be changed from 'Serverless' to 'RawDeployment'`), so the manual path is back-up, delete, recreate. Full procedure: https://access.redhat.com/articles/7134025.
 
 ```
 NS=<namespace>; NAME=<isvc>
-# 1. Back up the spec (metadata stripped) for recreation
 oc get isvc "$NAME" -n "$NS" -o yaml \
   | yq eval 'del(.metadata.resourceVersion, .metadata.uid, .metadata.creationTimestamp, .metadata.generation, .metadata.managedFields, .status)' - \
   > "/tmp/isvc-${NS}-${NAME}.yaml"
-
-# 2. Flip the deploymentMode annotation in the backup
 yq -i '.metadata.annotations."serving.kserve.io/deploymentMode" = "RawDeployment"' "/tmp/isvc-${NS}-${NAME}.yaml"
-
-# 3. Delete the old ISVC
 oc delete isvc "$NAME" -n "$NS"
-
-# 4. Recreate from backup
 oc apply -f "/tmp/isvc-${NS}-${NAME}.yaml"
 ```
-
-If the ISVCs are sample/demo workloads the user does not care about, skip steps 2 + 4 and just delete.
 
 ### Verify
 
 ```
-oc get isvc -A -o custom-columns='NS:.metadata.namespace,NAME:.metadata.name,ANNOT:.metadata.annotations.serving\.kserve\.io/deploymentMode,STATUS:.status.deploymentMode,READY:.status.conditions[?(@.type=="Ready")].status'
+oc get isvc -n "$NS" -o json \
+  | jq -r '["NAME","DEPLOYMENT_MODE","READY"], (.items[] | [.metadata.name, .status.deploymentMode, (.status.conditions[] | select(.type=="Ready") | .status)]) | @tsv' \
+  | column -t
 ```
 
-All converted ISVCs should show `ANNOT=RawDeployment`, `STATUS=RawDeployment`, `READY=True`.
+All converted ISVCs should show `DEPLOYMENT_MODE=RawDeployment`, `READY=True`.
 
 ---
 
@@ -79,31 +106,52 @@ All converted ISVCs should show `ANNOT=RawDeployment`, `STATUS=RawDeployment`, `
 
 **rhai-cli signal:** `workload / kserve / impacted-workloads` referencing ModelMesh ISVCs (multi-model serving).
 
-ModelMesh is more involved because each multi-model `ServingRuntime` (`spec.multiModel: true`) must be replaced with an equivalent single-model runtime. There is no `rhai-cli modelserving` helper; do it by hand:
+Migration guide §2.8.7.2 ships `modelmesh-to-raw.sh` as the **official** path. The helper discovers ModelMesh ISVCs in `--from-ns`, prompts you to select models and a runtime template, configures storage, and creates the new single-model RawDeployment ServingRuntime + InferenceService in `--target-ns`.
 
-1. Identify the ModelMesh ISVCs and multi-model `ServingRuntime`s they reference.
-2. For each ISVC, either delete it and recreate it against a single-model ServingRuntime that supports its format, or (if the model isn't worth migrating) delete the ISVC.
-3. Delete the orphaned multi-model `ServingRuntime`.
+Enumerate first:
 
 ```
-# Enumerate
-oc get isvc -A -o json | jq -r '.items[] | select((.metadata.annotations."serving.kserve.io/deploymentMode" // "") == "ModelMesh") | "\(.metadata.namespace)/\(.metadata.name)"'
-oc get servingruntime -A -o json | jq -r '.items[] | select(.spec.multiModel==true) | "\(.metadata.namespace)/\(.metadata.name)"'
+oc exec -n rhai-migration rhai-cli-0 -- \
+  /opt/rhai-cli/bin/rhai-cli lint --target-version 3.3.2 --verbose \
+  --checks "*kserve*" --isvc-deployment-mode modelmesh
+```
 
-# Delete a ModelMesh ISVC
-oc delete isvc <name> -n <namespace>
+Per namespace pair, dry-run then apply:
 
-# Delete its multi-model ServingRuntime (only after no ISVCs reference it)
-oc delete servingruntime <name> -n <namespace>
+```
+oc exec -n rhai-migration rhai-cli-0 -it -- \
+  /opt/rhai-upgrade-helpers/model-serving/before-upgrade/modelmesh-to-raw.sh \
+  --from-ns <source-namespace> --target-ns <target-namespace> --dry-run
+
+oc exec -n rhai-migration rhai-cli-0 -it -- \
+  /opt/rhai-upgrade-helpers/model-serving/before-upgrade/modelmesh-to-raw.sh \
+  --from-ns <source-namespace> --target-ns <target-namespace>
+```
+
+> **Storage-class gotcha (RWO PVCs):** if the ModelMesh runtime mounts a `ReadWriteOnce` PVC (common with `gp3-csi`), scale the ModelMesh `ServingRuntime` to `replicas: 0` and wait for its pod to terminate *before* applying the new ISVC. Otherwise the new pod can land on a different node and hang with `Multi-Attach error`. On RWX storage this is unnecessary.
+
+Once the new RawDeployment is `Ready=True`, delete the legacy ModelMesh ISVCs and multi-model ServingRuntimes per guide §2.8.7.2 step 5:
+
+```
+oc get isvc -n <source-namespace> -o json | jq -r '.items[]
+  | select(.status.deploymentMode == "ModelMesh"
+        or .metadata.annotations["serving.kserve.io/deploymentMode"] == "ModelMesh")
+  | .metadata.name' \
+  | while read -r name; do oc delete isvc "$name" -n <source-namespace>; done
+
+oc get servingruntimes.serving.kserve.io -n <source-namespace> -o json \
+  | jq -r '.items[] | select(.spec.multiModel==true) | .metadata.name' \
+  | while read -r name; do oc delete servingruntime "$name" -n <source-namespace>; done
 ```
 
 ### Verify
 
 ```
-# No ServingRuntime with multiModel=true should remain in use
 oc get servingruntime -A -o json \
   | jq -r '.items[] | select(.spec.multiModel==true) | "\(.metadata.namespace)/\(.metadata.name)"'
 ```
+
+No `multiModel=true` ServingRuntime should remain.
 
 #### Stale ModelMesh resources are common
 
@@ -133,31 +181,50 @@ Real-world counts: long-lived 2.x clusters often carry forgotten ModelMesh test 
 
 ---
 
-## § Update the inferenceservice-config ConfigMap
+## § Back up and update the inferenceservice-config ConfigMap
 
 **rhai-cli signal:** `component / kserve / configmap` (wording varies).
 
-Back up and add the hardware-profile ignorelist expected by 3.x:
+Two steps from migration guide §2.8.6 and §2.8.8. **Run these AFTER every ISVC is converted to RawDeployment**, not before — the guide's order is back up → convert ISVCs → update ConfigMap.
+
+Back up first (per §2.8.6):
 
 ```
-oc get cm inferenceservice-config -n redhat-ods-applications -o yaml \
-  > /tmp/inferenceservice-config-backup-$(date +%Y%m%d%H%M).yaml
+mkdir -p /tmp/rhoai-upgrade-backup
+oc get configmap inferenceservice-config -n redhat-ods-applications -o yaml \
+  > /tmp/rhoai-upgrade-backup/inferenceservice-config-backup.yaml
 ```
 
-Patch the ConfigMap by hand (the `rhai-cli modelserving update-config` helper does not exist in the shipped image):
+Then apply the hardware-profile ignorelist via the official helper (per §2.8.8). The helper marks the ConfigMap `opendatahub.io/managed=false` *and* adds the hardware-profile annotations to `serviceAnnotationDisallowedList` in one shot:
 
 ```
-# 1. Mark the ConfigMap unmanaged so the RHOAI operator doesn't overwrite it
-oc annotate configmap inferenceservice-config -n redhat-ods-applications \
-  opendatahub.io/managed=false --overwrite
-
-# 2. Add the hardware-profile annotations to serviceAnnotationDisallowedList
-oc get cm inferenceservice-config -n redhat-ods-applications -o json \
-  | jq '.data.inferenceService |= (fromjson
-      | .serviceAnnotationDisallowedList += ["opendatahub.io/hardware-profile-name","opendatahub.io/hardware-profile-namespace"]
-      | tojson)' \
-  | oc apply -f -
+oc exec -n rhai-migration rhai-cli-0 -- \
+  /opt/rhai-upgrade-helpers/model-serving/before-upgrade/hardwareprofiles-ignorelist.sh \
+  -n redhat-ods-applications
 ```
+
+Verify:
+
+```
+oc get configmap inferenceservice-config -n redhat-ods-applications \
+  -o yaml | grep "hardware" -B 2 -A 2
+oc get configmap inferenceservice-config -n redhat-ods-applications \
+  -o jsonpath='managed={.metadata.annotations.opendatahub\.io/managed}{"\n"}'
+```
+
+`managed=false` and the ignorelist should both be present.
+
+### Restore post-upgrade
+
+After the upgrade, run the after-upgrade helper to restore `managed=true` (per §4.9.1):
+
+```
+oc exec -n rhai-migration rhai-cli-0 -- \
+  /opt/rhai-upgrade-helpers/model-serving/after-upgrade/managed-inferenceservice-config.sh \
+  -n redhat-ods-applications
+```
+
+> The `managed=false` annotation prevents the upgrade from redeploying ISVCs. If a workload owner wanted fresh runtime images post-upgrade (newer vLLM build etc.), they restart their own predictors after this step.
 
 ---
 

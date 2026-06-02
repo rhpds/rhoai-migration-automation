@@ -44,13 +44,57 @@ Compare the live count to the backup count — if live < backup, that namespace 
 
 ## Guardrails
 
-If you have `GuardrailsOrchestrator` CRs, verify each one came back Ready and has its `otelExporter` config intact:
+Migration guide §4.6.2 prescribes a five-step procedure for every GuardrailsOrchestrator. The official helpers do most of the work — earlier revisions of this resolver missed them.
+
+### Step 1 — list and identify
 
 ```
 oc get guardrailsorchestrator -A
-oc get guardrailsorchestrator -A -o json \
-  | jq -r '.items[] | "\(.metadata.namespace)/\(.metadata.name)  otel=\(.spec.otelExporter // "none")"'
 ```
+
+If `No resources found`, skip this entire section.
+
+### Step 2 — patch deployments missing the ReadinessProbe (`patch-guardrails-deployment.sh`)
+
+For each `(namespace, orchestrator)` pair:
+
+```
+export NS=<namespace>
+export GORCH_NAME=<orchestrator-name>
+
+cd /opt/rhai-upgrade-helpers/trustyai
+
+./patch-guardrails-deployment.sh --gorch-name $GORCH_NAME --namespace $NS --check
+# If output is "OK readinessProbe already set" → next namespace.
+# If output is "NEEDS PATCH":
+./patch-guardrails-deployment.sh --gorch-name $GORCH_NAME --namespace $NS --fix
+# Script edits the deployment and waits for rollout to complete.
+```
+
+### Step 3 — check otelExporter schema (`migrate-gorch-otel-exporter.sh`)
+
+```
+./migrate-gorch-otel-exporter.sh --namespace $NS --check
+# If output is "already on new otelExporter schema" → skip step 4.
+# Otherwise:
+./migrate-gorch-otel-exporter.sh --namespace $NS --fix
+```
+
+The helper rewrites keys under `spec.otelExporter` to the 3.x shape. Use it before any hand-patching.
+
+### Step 4 — verify each orchestrator via /info
+
+```
+export GORCH_NAME=<gorch-name>
+export GORCH_ROUTE_HEALTH=$(oc get routes -n $NS "${GORCH_NAME}-health" -o jsonpath='{.spec.host}')
+curl -sSk "https://${GORCH_ROUTE_HEALTH}/info" -H "Authorization: Bearer $(oc whoami -t)" | jq .
+```
+
+All listed services should report `status: HEALTHY`.
+
+---
+
+The sections below are operational gotchas observed on real clusters — not in migration guide §4.6.2. Keep them as fallback after the official helpers have run.
 
 ### Gotcha 1 — missing orchestratorConfig ConfigMap
 
@@ -116,7 +160,7 @@ Use the helper if available:
 
 ```
 oc exec -n rhai-migration rhai-cli-0 -- \
-  bash /opt/rhai-upgrade-helpers/trustyai/restore_metrics.sh --namespace <ns>
+  bash /opt/rhai-upgrade-helpers/trustyai/restore-metrics.sh --namespace <ns>
 ```
 
 If the helper is not present in your image, walk the migration guide's "TrustyAI - After upgrade - Restore data" section by hand — it covers ~40 steps of port-forwarding + curl POST per metric, and is too long to mirror here. Do not improvise a different approach: TrustyAI metrics have internal consistency constraints that fail silently if uploaded in the wrong order.

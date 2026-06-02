@@ -27,7 +27,7 @@ RHCL replaces the standalone Authorino operator and becomes the auth/policy cont
 
 Skip this if you do not use LLMInferenceService. Otherwise:
 
-**Confirmed subscription fields** (verified against `oc get packagemanifest rhcl-operator -n openshift-marketplace`):
+**Confirmed subscription fields** (cross-checked against migration guide §2.8.10.1):
 
 | Field | Value |
 | --- | --- |
@@ -35,21 +35,26 @@ Skip this if you do not use LLMInferenceService. Otherwise:
 | Package name | `rhcl-operator` |
 | Catalog source | `redhat-operators` |
 | Channel | `stable` |
-| Install mode | **`AllNamespaces` only** (OwnNamespace / SingleNamespace / MultiNamespace all unsupported) |
+| Install mode | **"A specific namespace on the cluster"** into `kuadrant-system` (single-namespace; *not* AllNamespaces) |
 
 The **community** edition lives at `kuadrant-operator` in `community-operators`. **Do not** install that one — it is not supported for RHOAI 3.x and its CRD versions may not match what KServe LLM-d expects. Always use `rhcl-operator` from `redhat-operators`.
 
-> **Important:** Because only `AllNamespaces` is supported, install into `openshift-operators` (which ships an AllNamespaces OperatorGroup). A per-namespace OG with `targetNamespaces` will fail with `CSV status: OwnNamespace InstallModeType not supported`. The `kuadrant-system` namespace is still used for the Kuadrant CR itself — that CR is namespaced even though the operator watches cluster-wide.
+> **Earlier revisions of this resolver claimed `AllNamespaces` was the only supported install mode and pointed it at `openshift-operators`. That was wrong.** Migration guide §2.8.10.1 explicitly directs OperatorHub installation into `kuadrant-system` with mode "A specific namespace on the cluster." The OperatorHub UI handles namespace creation + OperatorGroup; the `oc apply` equivalent is below.
 
 ```
 oc create ns kuadrant-system 2>/dev/null || true
 
 oc apply -f - <<'EOF'
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata: { name: kuadrant-system, namespace: kuadrant-system }
+spec:
+  targetNamespaces:
+    - kuadrant-system
+---
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
-metadata:
-  name: rhcl-operator
-  namespace: openshift-operators
+metadata: { name: rhcl-operator, namespace: kuadrant-system }
 spec:
   channel: stable
   name: rhcl-operator
@@ -59,109 +64,66 @@ spec:
 EOF
 ```
 
-Wait for the CSV in `openshift-operators`:
+Wait for the CSV in `kuadrant-system`:
 
 ```
-oc get csv -n openshift-operators -l operators.coreos.com/rhcl-operator.openshift-operators= -w
+oc get csv -n kuadrant-system | grep rhcl
 ```
 
-After the CSV reaches `Succeeded`, create a Kuadrant CR so RHCL provisions Authorino (with TLS) and Limitador:
+After the CSV reaches `Succeeded`, create the Kuadrant CR so RHCL provisions Authorino and Limitador, and wait for `Ready`:
 
 ```
 oc apply -f - <<'EOF'
 apiVersion: kuadrant.io/v1beta1
 kind: Kuadrant
-metadata:
-  name: kuadrant
-  namespace: kuadrant-system
+metadata: { name: kuadrant, namespace: kuadrant-system }
 EOF
+
+oc wait Kuadrant -n kuadrant-system kuadrant --for=condition=Ready --timeout=10m
 ```
 
-Verify the kuadrant readiness check passes:
-
-```
-oc get kuadrant kuadrant -n kuadrant-system -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'; echo
-oc get authorino -A
-```
-
-> **Gateway API provider prerequisite:** Kuadrant will sit at `Ready=False` with `MissingDependency: [Gateway API provider (istio / envoy gateway)] is not installed` until a Gateway API provider exists. On OCP 4.19+ install **Service Mesh v3** (`servicemeshoperator3`, channel `stable`, in `openshift-operators`) and create an `Istio` + `IstioCNI` CR:
->
-> ```
-> oc apply -f - <<'EOF'
-> apiVersion: operators.coreos.com/v1alpha1
-> kind: Subscription
-> metadata: { name: servicemeshoperator3, namespace: openshift-operators }
-> spec:
->   channel: stable
->   name: servicemeshoperator3
->   source: redhat-operators
->   sourceNamespace: openshift-marketplace
->   installPlanApproval: Automatic
-> ---
-> apiVersion: sailoperator.io/v1
-> kind: Istio
-> metadata: { name: default }
-> spec: { version: v1.26.3, namespace: istio-system, updateStrategy: { type: InPlace } }
-> ---
-> apiVersion: sailoperator.io/v1
-> kind: IstioCNI
-> metadata: { name: default }
-> spec: { version: v1.26.3, namespace: istio-cni }
-> EOF
->
-> oc create ns istio-cni 2>/dev/null || true
-> # Restart kuadrant-operator so it re-detects the provider
-> oc delete pod -n openshift-operators -l app.kubernetes.io/name=kuadrant-operator
-> ```
+> **Gateway API provider:** the OCP Cluster Ingress Operator installs `servicemeshoperator3` automatically as the cluster's Gateway API provider — admin does **not** create `Istio` / `IstioCNI` CRs or subscribe to `servicemeshoperator3` by hand. Earlier revisions of this resolver instructed both; that was wrong and contradicted migration guide §2.8.10.1 (which says nothing about Sail or Istio CRs). On a *connected* cluster the SMv3 CSV appears in `openshift-operators` and reaches `Succeeded` without intervention. On a *disconnected* cluster, follow guide §2.8.10.2 to mirror the SMv3 image the Cluster Ingress Operator needs. If Kuadrant is stuck at `Ready=False / MissingDependency` on a connected cluster, the Cluster Ingress Operator itself is unhealthy — diagnose there, do not create Sail CRs by hand.
 
 ### 1b. Enable TLS on the Authorino listener
 
-The rhai-cli `authorino-tls-readiness` check requires `spec.listener.tls.enabled=true` and `spec.oidcServer.tls.enabled=true` on the Authorino CR that RHCL creates. The Kuadrant CR does not expose a field for this, so issue certs via cert-manager and patch the Authorino CR directly:
+Per migration guide §2.8.10.1, use OpenShift's built-in service signer to mint the listener cert — no cert-manager needed. The Authorino CR enables TLS on the **listener only**; `oidcServer.tls.enabled` stays `false`. Earlier revisions of this resolver instructed cert-manager `ClusterIssuer` + two `Certificate` CRs and TLS on the OIDC server; both were wrong.
 
 ```
+# Annotate the Authorino service so OpenShift's service signer issues the cert
+oc annotate svc/authorino-authorino-authorization \
+  service.beta.openshift.io/serving-cert-secret-name=authorino-server-cert \
+  -n kuadrant-system
+sleep 2
+
+# Apply the Authorino CR with TLS on the listener only
 oc apply -f - <<'EOF'
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata: { name: authorino-selfsigned }
-spec: { selfSigned: {} }
----
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata: { name: authorino-server-cert, namespace: kuadrant-system }
+apiVersion: operator.authorino.kuadrant.io/v1beta1
+kind: Authorino
+metadata:
+  name: authorino
+  namespace: kuadrant-system
 spec:
-  secretName: authorino-server-cert
-  duration: 87600h
-  issuerRef: { name: authorino-selfsigned, kind: ClusterIssuer }
-  commonName: authorino-authorization.kuadrant-system.svc
-  dnsNames:
-    - authorino-authorization.kuadrant-system.svc
-    - authorino-authorization.kuadrant-system.svc.cluster.local
----
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata: { name: authorino-oidc-server-cert, namespace: kuadrant-system }
-spec:
-  secretName: authorino-oidc-server-cert
-  duration: 87600h
-  issuerRef: { name: authorino-selfsigned, kind: ClusterIssuer }
-  commonName: authorino-oidc.kuadrant-system.svc
-  dnsNames:
-    - authorino-oidc.kuadrant-system.svc
-    - authorino-oidc.kuadrant-system.svc.cluster.local
+  replicas: 1
+  clusterWide: true
+  listener:
+    tls:
+      enabled: true
+      certSecretRef:
+        name: authorino-server-cert
+  oidcServer:
+    tls:
+      enabled: false
 EOF
 
-oc patch authorino authorino -n kuadrant-system --type=merge -p '{
-  "spec":{
-    "listener":{"tls":{"enabled":true,"certSecretRef":{"name":"authorino-server-cert"}}},
-    "oidcServer":{"tls":{"enabled":true,"certSecretRef":{"name":"authorino-oidc-server-cert"}}}
-  }
-}'
+oc wait --for=condition=ready pod -l authorino-resource=authorino -n kuadrant-system --timeout=150s
 ```
 
 Verify:
 
 ```
-oc get authorino authorino -n kuadrant-system -o jsonpath='listener={.spec.listener.tls.enabled} oidc={.spec.oidcServer.tls.enabled} ready={.status.conditions[?(@.type=="Ready")].status}'; echo
+oc get secret authorino-server-cert -n kuadrant-system
+oc get authorino authorino -n kuadrant-system -o jsonpath='listener={.spec.listener.tls.enabled} oidc={.spec.oidcServer.tls.enabled}'; echo
+oc get pods -n kuadrant-system -l authorino-resource=authorino
 ```
 
 ### 2. Disconnected environments

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared helpers for RHOAI 2.25.4 pre-migration install scripts.
+# Shared helpers for RHOAI 2.25.6 pre-migration install scripts.
 
 set -Eeuo pipefail
 

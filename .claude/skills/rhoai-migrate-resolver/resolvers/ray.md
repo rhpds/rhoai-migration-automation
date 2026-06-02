@@ -2,11 +2,13 @@
 
 **rhai-cli signal:** `component / ray / *` or `component / codeflare / *`.
 
-> **Important:** the DSC spec has **two separate components** — `codeflare` and `ray` — even though rhai-cli reports the CodeFlare blocker under the `ray/removal` key. Flip **both** to `Removed`:
->
-> ```
-> oc patch $(oc get dsc -o name | head -n1) --type=merge -p '{"spec":{"components":{"codeflare":{"managementState":"Removed"},"ray":{"managementState":"Removed"}}}}'
-> ```
+> **CodeFlare flips to `Removed`, not Ray.** Earlier revisions of this resolver patched **both** `codeflare` and `ray` to `Removed`. That was wrong — flipping `ray` to `Removed` tears down KubeRay, which is the controller that continues to manage RayClusters in 3.x. Per migration guide §2.7 the `ray_cluster_migration.py pre-upgrade` helper sets **only** `codeflare.managementState: Removed`. Do not touch `ray`.
+
+If you need to make the change by hand (e.g. the helper script isn't available):
+
+```
+oc patch $(oc get dsc -o name | head -n1) --type=merge -p '{"spec":{"components":{"codeflare":{"managementState":"Removed"}}}}'
+```
 
 ## Why
 
@@ -14,10 +16,7 @@
 >
 > — architectural-changes.md § *Training: Removal of Codeflare Operator*
 
-RHOAI 2.x used CodeFlare to wrap Ray; 3.x drops CodeFlare entirely. KubeRay continues to manage Ray clusters directly. RayCluster CRs survive the upgrade intact, but:
-
-- The CodeFlare Operator is uninstalled as a side effect of the pre-upgrade helper.
-- You should back up each RayCluster YAML first, in case reconciliation loses fields during the controller swap.
+RHOAI 2.x used CodeFlare to wrap Ray; 3.x drops CodeFlare entirely. KubeRay continues to manage Ray clusters directly. RayCluster CRs survive the upgrade intact, but you should back up each RayCluster YAML first in case reconciliation loses fields during the controller swap.
 
 ## Back up all RayCluster YAMLs
 
@@ -30,9 +29,9 @@ This:
 
 - Writes each RayCluster CR to `/tmp/rhoai-upgrade-backup/ray/Rhoai-2.x/<ns>_<name>.yaml`
 - Also writes the 3.x-equivalent shape to `/tmp/rhoai-upgrade-backup/ray/Rhoai-3.x/<ns>_<name>.yaml`
-- Uninstalls the CodeFlare Operator (destructive side effect)
+- Sets `codeflare.managementState: Removed` on the DataScienceCluster — the RHOAI operator then tears down CodeFlare pods (and unsubscribes the operator) as a reaction. The helper does *not* call `oc delete subscription` or `oc delete csv` directly. Earlier revisions of this resolver described it as "uninstalls the CodeFlare Operator (destructive side effect)" — that misstated the mechanism, even though the end result is the same.
 
-**Callout:** only run this when you're ready to commit to the upgrade. Removing CodeFlare mid-development will break any automation that depends on its APIs.
+**Callout:** only run this when you're ready to commit to the upgrade. Once CodeFlare is gone, automation that depends on its APIs will break.
 
 To enumerate RayClusters without touching CodeFlare:
 

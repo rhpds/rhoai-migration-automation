@@ -22,9 +22,9 @@ metadata:
     opendatahub.io/notebook-image: "true"
   annotations:
     opendatahub.io/notebook-image-creator: "rhoai-migration-test"
-    opendatahub.io/notebook-image-desc: "Upstream SciPy notebook (BYON migration sample)"
-    opendatahub.io/notebook-image-name: "Custom: SciPy (upstream)"
-    opendatahub.io/notebook-image-url: "quay.io/jupyter/scipy-notebook:lab-4.2.5"
+    opendatahub.io/notebook-image-desc: "Custom 2.x BYON workbench (SciPy + mlflow + onnxruntime) — must be rebuilt for 3.x"
+    opendatahub.io/notebook-image-name: "Custom: SciPy (BYON 2.x)"
+    opendatahub.io/notebook-image-url: "quay.io/hayesphilip/rhoai-workbench-2x:lab-4.2.5"
 spec:
   lookupPolicy:
     local: true
@@ -34,10 +34,10 @@ spec:
         opendatahub.io/notebook-python-dependencies: "[]"
         opendatahub.io/notebook-software: '[{"name":"JupyterLab","version":"4.2.5"}]'
         opendatahub.io/workbench-image-recommended: "false"
-        openshift.io/imported-from: quay.io/jupyter/scipy-notebook:lab-4.2.5
+        openshift.io/imported-from: quay.io/hayesphilip/rhoai-workbench-2x:lab-4.2.5
       from:
         kind: DockerImage
-        name: quay.io/jupyter/scipy-notebook:lab-4.2.5
+        name: quay.io/hayesphilip/rhoai-workbench-2x:lab-4.2.5
       importPolicy:
         importMode: Legacy
       referencePolicy:

@@ -76,9 +76,8 @@ Tear it all down (best-effort, reverse order):
 
 ## Expected "not Ready" states
 
-A successful install leaves two workloads in non-Ready states on purpose — don't chase them:
+A successful install leaves one workload in a non-Ready state on purpose — don't chase it:
 
-- **RStudio workbench** stays Stopped. The `rstudio-rhel9` ImageStream ships with no built tag; an admin has to run its BuildConfig (licensing dependency) before it can start. Realistic pre-migration state: the Notebook exists but isn't running.
 - **ModelMesh ISVC** (`my-modelmesh-isvc`) reports `Ready=False`. Its `storage-config` Secret points at a dummy S3 endpoint. Migration tooling only needs the ISVC + ServingRuntime to exist to detect them; actual model loading is out of scope.
 
 ## After the install

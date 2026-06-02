@@ -55,29 +55,13 @@ spec:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: rstudio-latest
-  namespace: workbenches-regular
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: rstudio-latest
-  namespace: workbenches-regular
-spec:
-  accessModes: ["ReadWriteOnce"]
-  resources:
-    requests:
-      storage: 5Gi
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
   name: custom
   namespace: workbenches-regular
 ---
-# Grant the `custom` SA OpenShift's anyuid SCC so the upstream jupyter/scipy-notebook
-# image can run as its baked-in UID 1000 (jovyan). This is the standard workaround
-# RHOAI admins apply for custom images that aren't built for random UIDs.
+# Grant the `custom` SA OpenShift's anyuid SCC so the BYON workbench image (based on
+# the upstream jupyter/scipy-notebook) can run as its baked-in UID 1000 (jovyan).
+# This is the standard workaround RHOAI admins apply for custom images that aren't
+# built for random UIDs.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -204,49 +188,6 @@ spec:
           persistentVolumeClaim:
             claimName: codeserver-2025-1
 ---
-# RStudio workbench, pinned to a specific tag — migration §2.6 requires "latest" before upgrade
-apiVersion: kubeflow.org/v1
-kind: Notebook
-metadata:
-  name: rstudio-latest
-  namespace: workbenches-regular
-  labels:
-    app: rstudio-latest
-    opendatahub.io/dashboard: "true"
-  annotations:
-    opendatahub.io/image-display-name: "RStudio | 2025.1"
-    notebooks.opendatahub.io/inject-oauth: "true"
-    # RStudio is intentionally left Stopped — the rstudio-rhel9 ImageStream ships
-    # without a published tag; an RHOAI admin has to run the bundled BuildConfig
-    # (or accept the RStudio license) before it can actually start. Realistic
-    # pre-migration state: the workbench exists but isn't running.
-    kubeflow-resource-stopped: "true"
-spec:
-  template:
-    spec:
-      serviceAccountName: rstudio-latest
-      containers:
-        - name: rstudio-latest
-          image: image-registry.openshift-image-registry.svc:5000/redhat-ods-applications/rstudio-rhel9:latest
-          resources:
-            requests:
-              cpu: "1"
-              memory: 2Gi
-            limits:
-              cpu: "2"
-              memory: 4Gi
-          ports:
-            - containerPort: 8787
-              name: notebook-port
-              protocol: TCP
-          volumeMounts:
-            - name: rstudio-latest
-              mountPath: /opt/app-root/src
-      volumes:
-        - name: rstudio-latest
-          persistentVolumeClaim:
-            claimName: rstudio-latest
----
 # Custom-image workbench — uses an UPSTREAM Jupyter image (not RHOAI's ImageStream).
 # §2.6.1 flags custom images as needing migration to the Kubernetes Gateway API for
 # path-based routing. Having this Notebook lets rhai-cli exercise that check path.
@@ -259,7 +200,7 @@ metadata:
     app: custom
     opendatahub.io/dashboard: "true"
   annotations:
-    opendatahub.io/image-display-name: "Custom | SciPy Notebook (upstream)"
+    opendatahub.io/image-display-name: "Custom | SciPy + mlflow + onnxruntime (BYON 2.x)"
     notebooks.opendatahub.io/inject-oauth: "true"
 spec:
   template:
@@ -271,7 +212,7 @@ spec:
         fsGroup: 100
       containers:
         - name: custom
-          image: quay.io/jupyter/scipy-notebook:lab-4.2.5
+          image: quay.io/hayesphilip/rhoai-workbench-2x:lab-4.2.5
           resources:
             requests:
               cpu: "1"
@@ -283,6 +224,20 @@ spec:
             - containerPort: 8888
               name: notebook-port
               protocol: TCP
+          env:
+            # The upstream community Jupyter image has no NB_PREFIX awareness and
+            # would default to serving at "/". The RHOAI 2.x Dashboard's "Open"
+            # link points at /notebook/<ns>/<name>/, so without base_url set,
+            # learners get "404 - You are requesting a page that does not exist".
+            # (Module 4 of the workshop re-builds this image with an NB_PREFIX-aware
+            # entrypoint; this NOTEBOOK_ARGS workaround keeps the BYON image usable
+            # on 2.x in the meantime.)
+            - name: NOTEBOOK_ARGS
+              value: |-
+                --ServerApp.port=8888
+                --ServerApp.token=''
+                --ServerApp.password=''
+                --ServerApp.base_url=/notebook/workbenches-regular/custom
           volumeMounts:
             - name: custom
               mountPath: /opt/app-root/src

@@ -9,7 +9,7 @@ metadata:
 ---
 # Pre-migration LLMInferenceService — no authentication configured yet, no RHCL present.
 # Migration §2.8.10.3 will add AuthPolicy after installing Red Hat Connectivity Link.
-# Migration §2.8.10.4 will freeze the template annotations before the 3.3.2 upgrade.
+# Migration §2.8.10.4 will freeze the template annotations before the 3.3.3 upgrade.
 #
 # CPU-only variant: points at the same tinyllama OCI modelcar used by kserve-raw +
 # kserve-serverless, overrides the container image to vLLM-CPU, and drops all GPU

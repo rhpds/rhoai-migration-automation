@@ -13,37 +13,35 @@ No architectural change driver here — this is a schema-deprecation scan (migra
 The rhai-cli container ships a script that enumerates every issue in your DSPAs:
 
 ```
-oc exec -n rhai-migration rhai-cli-0 -- \
-  bash /opt/rhai-upgrade-helpers/ai_pipelines/check_before_upgrade.sh
+cd /opt/rhai-upgrade-helpers/ai_pipelines
+./check_before_upgrade.sh
 ```
 
 It prints one of:
 
 - **OK** → re-run rhai-cli and move on.
-- **Warning: deprecated `instructLab` field** → safe to ignore; the field is removed in 3.x but the DSPA reconciler tolerates its presence during upgrade.
-- **Deprecated v1alpha1 DSPA found** → upgrade the CRs to v1 (below).
-- **Custom RBAC roles detected** → review each listed Role/ClusterRole. The migration doc lists the 3.x role names; if your custom Role grants a verb on a resource the new role also grants, you can leave it. If it grants access to a resource that was removed in 3.x, delete it.
+- **Warning: deprecated `instructLab` field** → safe to ignore (guide §2.4 step 6 says this does not affect the upgrade).
+- **Deprecated v1alpha1 DSPA found** → follow the script's remediation guidance to update each CR (see fallback below).
+- **Custom RBAC roles need updates** → run `update_dsp_role.sh` (next section).
 
-## Upgrade v1alpha1 DSPA CRs to v1
+## Update custom RBAC roles via update_dsp_role.sh
 
-If the helper flags any `apiVersion: datasciencepipelinesapplications.opendatahub.io/v1alpha1` DSPAs:
+Per migration guide §2.4 step 5, if `check_before_upgrade.sh` reports custom RBAC roles needing updates, coordinate with the AI Pipelines users and then run the official remediation helper:
 
 ```
-# List them
-oc get dspa.v1alpha1.datasciencepipelinesapplications.opendatahub.io -A 2>/dev/null \
-  || oc get dspa -A -o json | jq -r '.items[] | select(.apiVersion | endswith("v1alpha1")) | "\(.metadata.namespace)/\(.metadata.name)"'
-
-# For each, export, patch the apiVersion + dspVersion, and re-apply.
-# The spec fields are compatible — only the apiVersion changes.
-NS=<namespace>; NAME=<dspa>
-oc get dspa "$NAME" -n "$NS" -o yaml > /tmp/dspa-$NAME.yaml
-# Hand-edit /tmp/dspa-$NAME.yaml:
-#   apiVersion: datasciencepipelinesapplications.opendatahub.io/v1
-#   spec.dspVersion: v2
-oc apply -f /tmp/dspa-$NAME.yaml
+oc exec -n rhai-migration rhai-cli-0 -- bash -c '
+  cd /opt/rhai-upgrade-helpers/ai_pipelines
+  ./update_dsp_role.sh
+'
 ```
+
+After the script completes, re-run `check_before_upgrade.sh` to confirm the issues are gone (guide §2.4 step 6).
+
+> Earlier revisions of this resolver included a hand-edited `apiVersion: …/v1` + invented `spec.dspVersion: v2` recipe. That field is not in guide §2.4 and the manual recreate is not the documented path — drop it. The helpers do the right thing.
 
 ## Patch the DSPA CRD's storedVersions
+
+> **Not in guide §2.4.** This step is operational knowledge from real-cluster runs, not a documented migration step. Use it when the OLM upgrade hits the "new CRD removes version vX that is listed as a stored version" error.
 
 Even after every DSPA *resource* is at `v1`, the CRD itself may still list `v1alpha1` in `.status.storedVersions` — a leftover from the days the cluster did serve v1alpha1. The 3.3.2 operator's CRD bump refuses to apply when storedVersions includes a removed version (same class of OLM error as `risk of data loss updating "<crd>": new CRD removes version v1alpha1 that is listed as a stored version`).
 
@@ -79,11 +77,14 @@ Either way, this isn't a migration blocker.
 ## Verify
 
 ```
-# All DSPAs on v1 and v2 pipelines
-oc get dspa -A -o custom-columns='NS:.metadata.namespace,NAME:.metadata.name,API:.apiVersion,DSP:.spec.dspVersion'
+# All DSPAs at apiVersion …/v1
+oc get dspa -A -o custom-columns='NS:.metadata.namespace,NAME:.metadata.name,API:.apiVersion'
 
-# No more instructLab deprecation warnings
-oc exec -n rhai-migration rhai-cli-0 -- bash /opt/rhai-upgrade-helpers/ai_pipelines/check_before_upgrade.sh
+# check_before_upgrade.sh reports no remaining issues
+oc exec -n rhai-migration rhai-cli-0 -- bash -c '
+  cd /opt/rhai-upgrade-helpers/ai_pipelines
+  ./check_before_upgrade.sh
+'
 ```
 
 ## Callouts

@@ -14,8 +14,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../lib/common.sh"
 
 if ! oc get crd llminferenceservices.serving.kserve.io >/dev/null 2>&1; then
-  warn "LLMInferenceService CRD not present in this RHOAI 2.25.4 install — skipping sample"
-  warn "  (distributed inference is a Technology Preview; only some 2.25.4 channels ship the CRD)"
+  warn "LLMInferenceService CRD not present in this RHOAI 2.25.6 install — skipping sample"
+  warn "  (distributed inference is a Technology Preview; only some 2.25.6 channels ship the CRD)"
   exit 0
 fi
 apply_manifest "${SCRIPT_DIR}/llm-isvc.yaml"

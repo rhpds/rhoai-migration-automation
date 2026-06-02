@@ -7,8 +7,60 @@ metadata:
     opendatahub.io/dashboard: "true"
     modelmesh-enabled: "true"
 ---
-# Stub data connection — ModelMesh pods mount this Secret to resolve ISVC storage.key lookups.
-# Credentials are dummies; the migration only needs the ISVC/ServingRuntime pair to exist.
+# PVC that holds the ONNX model in the OpenVINO Model Server (OVMS) repository
+# layout: <model-name>/<version>/<file>. Both the ModelMesh "before" state and the
+# migrated KServe RawDeployment "after" state read the model from this PVC, so the
+# migration is a real re-host (not a delete). RWO is fine for a single-replica lab.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: model-store
+  namespace: ml-project-c
+  labels:
+    opendatahub.io/dashboard: "true"
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+# Seed job: download MobileNetV2 (ONNX, ~14 MB, CPU image classification) into the
+# OVMS layout. The onnx/models repo serves the file via Git LFS, so the github.com
+# /raw/ URL 302-redirects to the LFS media endpoint — curl MUST follow redirects (-L)
+# or it saves the redirect HTML instead of the model.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seed-onnx-model
+  namespace: ml-project-c
+spec:
+  backoffLimit: 4
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: fetch
+          image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -e
+              mkdir -p /mnt/models/mobilenet/1
+              curl -L --fail -o /mnt/models/mobilenet/1/mobilenetv2-7.onnx \
+                https://github.com/onnx/models/raw/main/validated/vision/classification/mobilenet/model/mobilenetv2-7.onnx
+              echo "Downloaded:"; ls -la /mnt/models/mobilenet/1/
+              # Sanity: an ONNX binary is multi-MB; an LFS pointer would be a few hundred bytes.
+              sz=$(stat -c%s /mnt/models/mobilenet/1/mobilenetv2-7.onnx)
+              echo "size=$sz bytes"
+              [ "$sz" -gt 1000000 ] || { echo "ERROR: model too small — likely an LFS pointer, not the binary"; exit 1; }
+          volumeMounts:
+            - { name: store, mountPath: /mnt/models }
+      volumes:
+        - name: store
+          persistentVolumeClaim: { claimName: model-store }
+---
+# ModelMesh storage-config: a PVC-backed connection (not S3). ModelMesh resolves the
+# ISVC's storage.key against this Secret; type=pvc points it at the model-store PVC.
 apiVersion: v1
 kind: Secret
 metadata:
@@ -18,72 +70,101 @@ metadata:
     opendatahub.io/dashboard: "true"
 type: Opaque
 stringData:
-  aws-connection-my-storage: |
+  pvc-models: |
     {
-      "type": "s3",
-      "access_key_id": "AKIAEXAMPLE",
-      "secret_access_key": "EXAMPLESECRET",
-      "endpoint_url": "https://s3.us-east-1.amazonaws.com",
-      "default_bucket": "rhoai-migration-test",
-      "region": "us-east-1"
+      "type": "pvc",
+      "name": "model-store"
     }
 ---
-# Multi-model ServingRuntime — the spec.multiModel: true marker is what §2.8.7.2 keys off.
+# ModelMesh runtime config overrides. Two settings, both required for the PVC-backed
+# ONNX sample below to run reliably on a default RWO storage class:
+#
+#   allowAnyPVC: true
+#     ModelMesh defaults to false, which rejects the pvc-models storage entry below.
+#
+#   podsPerRuntime: 1
+#     ModelMesh defaults to 2 replicas per runtime. With a RWO PVC (gp3-csi, etc.) and
+#     the default RollingUpdate strategy, controller restarts surge a 3rd pod onto a
+#     different node — which then fails with "Multi-Attach error: Volume is already
+#     used by pod(s)..." because RWO can't attach across nodes. Forcing podsPerRuntime: 1
+#     eliminates the race: only ever one ModelMesh pod, one PVC mount, no contention.
+#     For production use a RWX storage class (efs-csi, ocs cephfs, NFS, etc.) and you
+#     can leave this at the default of 2 — RWX lets both replicas mount at once.
+#
+# run.sh restarts the modelmesh-controller so it picks both settings up.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: model-serving-config
+  namespace: redhat-ods-applications
+data:
+  config.yaml: |
+    allowAnyPVC: true
+    podsPerRuntime: 1
+---
+# Multi-model ServingRuntime (ModelMesh) — OVMS serves ONNX. spec.multiModel: true is
+# the marker the migration assessment keys off.
+#
+# VALIDATED: this spec is taken from the cluster's OOTB `ovms` ServingRuntime template
+# (oc get template ovms -n redhat-ods-applications). A hand-rolled OVMS runtime that
+# omits grpcDataEndpoint/grpcEndpoint causes the modelmesh-controller to panic with a
+# nil-pointer dereference (servingruntime_controller.go) and crashloop, taking the whole
+# modelmeshserving component (and the DSC) Not Ready. Keep grpcEndpoint + grpcDataEndpoint.
+# The image digest below is the RHOAI 2.25.4 productized OVMS — pinned because that's
+# the version it was validated on. The install now starts at 2.25.6, where the OOTB
+# `ovms` template may carry a newer digest; the pinned 2.25.4 image still runs fine
+# (it's just an OVMS runtime). To match the cluster's current OOTB version exactly,
+# refresh from: oc get template ovms -n redhat-ods-applications -o yaml
 apiVersion: serving.kserve.io/v1alpha1
 kind: ServingRuntime
 metadata:
-  name: mlserver-1.x
+  name: ovms-mm
   namespace: ml-project-c
   labels:
     opendatahub.io/dashboard: "true"
   annotations:
-    openshift.io/display-name: "MLServer 1.x multi-model"
-    enable-route: "true"
+    openshift.io/display-name: "OVMS multi-model (ModelMesh)"
 spec:
-  supportedModelFormats:
-    - name: sklearn
-      version: "0"
-      autoSelect: true
-    - name: xgboost
-      version: "1"
-      autoSelect: true
-    - name: lightgbm
-      version: "3"
-      autoSelect: true
   multiModel: true
-  protocolVersions:
-    - grpc-v2
   grpcEndpoint: port:8085
   grpcDataEndpoint: port:8001
-  containers:
-    - name: mlserver
-      image: docker.io/seldonio/mlserver:1.6.1
-      env:
-        - name: MLSERVER_MODELS_DIR
-          value: /models/_mlserver_models/
-        - name: MLSERVER_GRPC_PORT
-          value: "8001"
-        - name: MLSERVER_HTTP_PORT
-          value: "8002"
-        - name: MLSERVER_LOAD_MODELS_AT_STARTUP
-          value: "false"
-        - name: MLSERVER_MODEL_NAME
-          value: dummy-model
-      resources:
-        requests:
-          cpu: 500m
-          memory: 1Gi
-        limits:
-          cpu: "5"
-          memory: 1Gi
+  protocolVersions:
+    - grpc-v1
+  supportedModelFormats:
+    - name: onnx
+      version: "1"
+      autoSelect: true
+    - name: openvino_ir
+      version: opset1
+      autoSelect: true
   builtInAdapter:
-    serverType: mlserver
-    runtimeManagementPort: 8001
+    serverType: ovms
+    runtimeManagementPort: 8888
     memBufferBytes: 134217728
     modelLoadingTimeoutMillis: 90000
+    env:
+      - name: OVMS_FORCE_TARGET_DEVICE
+        value: AUTO
+  containers:
+    - name: ovms
+      image: registry.redhat.io/rhoai/odh-openvino-model-server-rhel9@sha256:225115b4a438e3af202a2507ed9a7054fab3a1018830be9935496a37cb145fb8
+      args:
+        - --port=8001
+        - --rest_port=8888
+        - --config_path=/models/model_config_list.json
+        - --file_system_poll_wait_seconds=0
+        - --grpc_bind_address=0.0.0.0
+        - --rest_bind_address=0.0.0.0
+      resources:
+        requests:
+          cpu: "500m"
+          memory: 1Gi
+        limits:
+          cpu: "2"
+          memory: 2Gi
 ---
-# ModelMesh InferenceService — migration §2.8.7.2 converts this to RawDeployment
-# with an equivalent single-model ServingRuntime.
+# ModelMesh InferenceService — §2.8.7.2 migrates this to a single-model KServe
+# RawDeployment ISVC reading the same model from the PVC.
 apiVersion: serving.kserve.io/v1beta1
 kind: InferenceService
 metadata:
@@ -91,14 +172,16 @@ metadata:
   namespace: ml-project-c
   annotations:
     serving.kserve.io/deploymentMode: "ModelMesh"
+    openshift.io/display-name: my-modelmesh-isvc
   labels:
     opendatahub.io/dashboard: "true"
 spec:
   predictor:
     model:
       modelFormat:
-        name: sklearn
-      runtime: mlserver-1.x
+        name: onnx
+        version: "1"
+      runtime: ovms-mm
       storage:
-        key: aws-connection-my-storage
-        path: sklearn/mnist-svm.joblib
+        key: pvc-models
+        path: mobilenet
