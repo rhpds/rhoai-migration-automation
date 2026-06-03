@@ -106,7 +106,23 @@ All converted ISVCs should show `DEPLOYMENT_MODE=RawDeployment`, `READY=True`.
 
 **rhai-cli signal:** `workload / kserve / impacted-workloads` referencing ModelMesh ISVCs (multi-model serving).
 
-Migration guide §2.8.7.2 ships `modelmesh-to-raw.sh` as the **official** path. The helper discovers ModelMesh ISVCs in `--from-ns`, prompts you to select models and a runtime template, configures storage, and creates the new single-model RawDeployment ServingRuntime + InferenceService in `--target-ns`.
+Migration guide §2.8.7.2 ships `modelmesh-to-raw.sh` as the **official** path. The helper discovers ModelMesh ISVCs in `--from-ns`, prompts you to select models and a runtime template, configures storage, and creates the new single-model RawDeployment ServingRuntime + InferenceService.
+
+> **Two flag combinations — they don't compose:**
+>
+> - `--from-ns <A> --target-ns <B>` (source ≠ target) supports `--dry-run` for safe preview. Source and target equal produces `✗ Error: --from-ns and --target-ns cannot be the same`.
+> - `--from-ns <A> --preserve-namespace` runs *in-place*. It is destructive and cannot be combined with `--dry-run` (`✗ Error: --dry-run and --preserve-namespace cannot be used together`). The interactive prompts (which ISVCs / which runtime template) are the safety net.
+
+> **Known script bug — PVC-backed models.** When the original ModelMesh ISVC used PVC storage (`storage: { key: pvc-models, path: ... }`), `modelmesh-to-raw.sh` transcribes that block verbatim into the new RawDeployment ISVC. The KServe admission webhook rejects it with `storage type must be one of [s3, hdfs, webhdfs]. storage type [pvc] is not supported`, and the ReplicaSet stays at 0. Patch the ISVC to the KServe `storageUri` form post-script:
+>
+> ```
+> oc patch isvc <name> -n <ns> --type=json -p='[
+>   {"op":"remove","path":"/spec/predictor/model/storage"},
+>   {"op":"add","path":"/spec/predictor/model/storageUri","value":"pvc://<pvc-name>/<path>"}
+> ]'
+> ```
+>
+> S3-backed ModelMesh ISVCs migrate cleanly (S3 is a supported KServe storage type) — only PVC-backed ones hit this gap.
 
 Enumerate first:
 
@@ -116,7 +132,7 @@ oc exec -n rhai-migration rhai-cli-0 -- \
   --checks "*kserve*" --isvc-deployment-mode modelmesh
 ```
 
-Per namespace pair, dry-run then apply:
+**Cross-namespace** (preview-friendly):
 
 ```
 oc exec -n rhai-migration rhai-cli-0 -it -- \
@@ -126,6 +142,24 @@ oc exec -n rhai-migration rhai-cli-0 -it -- \
 oc exec -n rhai-migration rhai-cli-0 -it -- \
   /opt/rhai-upgrade-helpers/model-serving/before-upgrade/modelmesh-to-raw.sh \
   --from-ns <source-namespace> --target-ns <target-namespace>
+```
+
+**Same-namespace in-place** (keeps the original name, no cross-namespace storage permission setup; no dry-run):
+
+```
+oc exec -n rhai-migration rhai-cli-0 -it -- \
+  /opt/rhai-upgrade-helpers/model-serving/before-upgrade/modelmesh-to-raw.sh \
+  --from-ns <namespace> --preserve-namespace
+```
+
+To inspect generated YAML *before* an in-place run, dry-run against a scratch target namespace, review the files inside the rhai-cli pod, then drop the scratch namespace and execute `--preserve-namespace`:
+
+```
+oc create ns mm-preview 2>/dev/null || true
+oc exec -n rhai-migration rhai-cli-0 -it -- \
+  /opt/rhai-upgrade-helpers/model-serving/before-upgrade/modelmesh-to-raw.sh \
+  --from-ns <namespace> --target-ns mm-preview --dry-run
+oc delete ns mm-preview
 ```
 
 > **Storage-class gotcha (RWO PVCs):** if the ModelMesh runtime mounts a `ReadWriteOnce` PVC (common with `gp3-csi`), scale the ModelMesh `ServingRuntime` to `replicas: 0` and wait for its pod to terminate *before* applying the new ISVC. Otherwise the new pod can land on a different node and hang with `Multi-Attach error`. On RWX storage this is unnecessary.
@@ -351,15 +385,22 @@ oc delete subscription jaeger-product -n openshift-operators --ignore-not-found
 
 **rhai-cli signal:** `dependency / authorino-operator / uninstall`.
 
-Standalone Authorino is replaced by Red Hat Connectivity Link (RHCL) in 3.x. Uninstalling the standalone operator is safe once no LLMInferenceService or other KServe auth workload depends on it.
+Standalone Authorino is replaced by Red Hat Connectivity Link (RHCL) in 3.x. Uninstalling is safe once no LLMInferenceService or other KServe auth workload depends on the standalone install — but **only delete the Subscription**. RHCL also installs into `openshift-operators` (AllNamespaces) and depends on the same `authorino-operator` package; OLM dedupes them to a single shared CSV. Deleting the CSV tears down RHCL's Authorino too.
 
 ```
-oc get subscription -n openshift-operators authorino-operator -o jsonpath='{.status.installedCSV}{"\n"}' \
-  | xargs -I{} oc delete csv {} -n openshift-operators --ignore-not-found
+# Subscription-only delete. The CSV stays alive because rhcl-operator's Subscription
+# still depends on the same authorino-operator package.
 oc delete subscription authorino-operator -n openshift-operators --ignore-not-found
 ```
 
-**Do not** uninstall if you have RHCL (also bundles Authorino) already deployed — RHCL will manage it.
+Verify the shared CSV is still healthy after the Subscription delete:
+
+```
+oc get csv -n openshift-operators | grep authorino-operator
+# Expected: authorino-operator.v1.x.y   Authorino Operator   ...   Succeeded
+```
+
+> **Earlier revisions** of this resolver had the cleanup capture `installedCSV` from the standalone Subscription and `oc delete csv` it, on the rationale that RHCL lived in a separate namespace (`kuadrant-system`) with its own bundled Authorino CSV. That was only correct when RHCL was installed into `kuadrant-system`. The RHCL v1.3.3 install mode requirement (AllNamespaces / `openshift-operators` — see *§ Install Red Hat Connectivity Link*) shares the CSV with the standalone install. Drop the CSV delete to avoid breaking RHCL.
 
 ---
 

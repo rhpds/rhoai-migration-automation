@@ -27,8 +27,9 @@ oc exec -n rhai-migration rhai-cli-0 -- \
 
 This:
 
-- Writes each RayCluster CR to `/tmp/rhoai-upgrade-backup/ray/Rhoai-2.x/<ns>_<name>.yaml`
-- Also writes the 3.x-equivalent shape to `/tmp/rhoai-upgrade-backup/ray/Rhoai-3.x/<ns>_<name>.yaml`
+- Writes each RayCluster CR to `/tmp/rhoai-upgrade-backup/ray/rhoai-2.x/<ns>_<name>.yaml`
+- Also writes the 3.x-equivalent shape to `/tmp/rhoai-upgrade-backup/ray/rhoai-3.x/<ns>_<name>.yaml`
+- *Path-case gotcha:* migration guide §2.7 sample output documents these as capitalized (`Rhoai-2.x` / `Rhoai-3.x`), but the shipped script writes lowercase. Use lowercase when listing or referencing the backup.
 - Sets `codeflare.managementState: Removed` on the DataScienceCluster — the RHOAI operator then tears down CodeFlare pods (and unsubscribes the operator) as a reaction. The helper does *not* call `oc delete subscription` or `oc delete csv` directly. Earlier revisions of this resolver described it as "uninstalls the CodeFlare Operator (destructive side effect)" — that misstated the mechanism, even though the end result is the same.
 
 **Callout:** only run this when you're ready to commit to the upgrade. Once CodeFlare is gone, automation that depends on its APIs will break.

@@ -156,12 +156,19 @@ The migration guide's TrustyAI "Restore data" section provides a long sequence:
 2. Port-forward to the service
 3. Replay each backed-up metric via the `POST /metrics/*` endpoints
 
-Use the helper if available:
+Use the helper if available. It requires **both** `--namespace` and `--file` (missing `-f` produces `[ERROR] Backup file is required. Use -f flag.`):
 
 ```
+NS=<ns>
+BACKUP_FILE=$(oc exec -n rhai-migration rhai-cli-0 -- bash -c \
+  "ls /tmp/rhoai-upgrade-backup/trustyai/trustyai-metrics-${NS}-*.json 2>/dev/null | tail -1")
+
 oc exec -n rhai-migration rhai-cli-0 -- \
-  bash /opt/rhai-upgrade-helpers/trustyai/restore-metrics.sh --namespace <ns>
+  bash /opt/rhai-upgrade-helpers/trustyai/restore-metrics.sh \
+  --namespace "$NS" --file "$BACKUP_FILE"
 ```
+
+The script also supports `-d/--dry-run` (preview without applying) and `-s/--skip-existing` (idempotent re-run, checks by model ID + metric type).
 
 If the helper is not present in your image, walk the migration guide's "TrustyAI - After upgrade - Restore data" section by hand — it covers ~40 steps of port-forwarding + curl POST per metric, and is too long to mirror here. Do not improvise a different approach: TrustyAI metrics have internal consistency constraints that fail silently if uploaded in the wrong order.
 

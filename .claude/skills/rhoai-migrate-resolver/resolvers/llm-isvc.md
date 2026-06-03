@@ -27,7 +27,7 @@ RHCL replaces the standalone Authorino operator and becomes the auth/policy cont
 
 Skip this if you do not use LLMInferenceService. Otherwise:
 
-**Confirmed subscription fields** (cross-checked against migration guide §2.8.10.1):
+**Confirmed subscription fields** (verified on RHCL v1.3.3 / RHOAI 3.3.3 cluster):
 
 | Field | Value |
 | --- | --- |
@@ -35,26 +35,28 @@ Skip this if you do not use LLMInferenceService. Otherwise:
 | Package name | `rhcl-operator` |
 | Catalog source | `redhat-operators` |
 | Channel | `stable` |
-| Install mode | **"A specific namespace on the cluster"** into `kuadrant-system` (single-namespace; *not* AllNamespaces) |
+| Install mode | **AllNamespaces only** (`OwnNamespace` is *not* supported for RHCL v1.3.3) |
+| Install location | `openshift-operators` (which ships an AllNamespaces OperatorGroup by default) |
 
 The **community** edition lives at `kuadrant-operator` in `community-operators`. **Do not** install that one — it is not supported for RHOAI 3.x and its CRD versions may not match what KServe LLM-d expects. Always use `rhcl-operator` from `redhat-operators`.
 
-> **Earlier revisions of this resolver claimed `AllNamespaces` was the only supported install mode and pointed it at `openshift-operators`. That was wrong.** Migration guide §2.8.10.1 explicitly directs OperatorHub installation into `kuadrant-system` with mode "A specific namespace on the cluster." The OperatorHub UI handles namespace creation + OperatorGroup; the `oc apply` equivalent is below.
+> **History — this resolver has bounced on the install mode.** Migration guide §2.8.10.1 directs OperatorHub installation into `kuadrant-system` with mode "A specific namespace on the cluster" (i.e., OwnNamespace). On RHCL v1.3.3 that produces:
+>
+> ```
+> phase: Failed
+> reason: UnsupportedOperatorGroup
+> message: OwnNamespace InstallModeType not supported, cannot configure to watch own namespace
+> ```
+>
+> The bundled `dns-operator` and `limitador-operator` CSVs fail with the same error. Only Authorino installs (it supports OwnNamespace) but is stranded without the rest. The guide pre-dates this constraint — install AllNamespaces into `openshift-operators` instead. The Kuadrant CR + Authorino TLS resources still live in `kuadrant-system`; only the Subscription moves.
 
 ```
 oc create ns kuadrant-system 2>/dev/null || true
 
 oc apply -f - <<'EOF'
-apiVersion: operators.coreos.com/v1
-kind: OperatorGroup
-metadata: { name: kuadrant-system, namespace: kuadrant-system }
-spec:
-  targetNamespaces:
-    - kuadrant-system
----
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
-metadata: { name: rhcl-operator, namespace: kuadrant-system }
+metadata: { name: rhcl-operator, namespace: openshift-operators }
 spec:
   channel: stable
   name: rhcl-operator
@@ -64,13 +66,28 @@ spec:
 EOF
 ```
 
-Wait for the CSV in `kuadrant-system`:
+`openshift-operators` already has the default `global-operators` AllNamespaces OperatorGroup — no OperatorGroup needs to be applied. Wait for all four CSVs (rhcl, dns, limitador, authorino) to reach `Succeeded`:
 
 ```
-oc get csv -n kuadrant-system | grep rhcl
+oc get csv -n openshift-operators | grep -iE "rhcl|dns-operator|limitador|authorino"
 ```
 
-After the CSV reaches `Succeeded`, create the Kuadrant CR so RHCL provisions Authorino and Limitador, and wait for `Ready`:
+### Recovery from the OwnNamespace failure
+
+If a prior install attempt produced the `UnsupportedOperatorGroup` Failed state, clean it up first:
+
+```
+# Delete the failed CSVs, Subscription, and the kuadrant-system OperatorGroup
+oc delete subscription -n kuadrant-system rhcl-operator --ignore-not-found
+oc delete csv -n kuadrant-system \
+  rhcl-operator.v1.3.3 dns-operator.v1.3.0 limitador-operator.v1.3.0 \
+  --ignore-not-found
+oc delete operatorgroup -n kuadrant-system kuadrant-system --ignore-not-found
+```
+
+Then re-apply the AllNamespaces Subscription above.
+
+After the CSV reaches `Succeeded`, create the Kuadrant CR so RHCL provisions Authorino and Limitador:
 
 ```
 oc apply -f - <<'EOF'
@@ -78,11 +95,11 @@ apiVersion: kuadrant.io/v1beta1
 kind: Kuadrant
 metadata: { name: kuadrant, namespace: kuadrant-system }
 EOF
-
-oc wait Kuadrant -n kuadrant-system kuadrant --for=condition=Ready --timeout=10m
 ```
 
-> **Gateway API provider:** the OCP Cluster Ingress Operator installs `servicemeshoperator3` automatically as the cluster's Gateway API provider — admin does **not** create `Istio` / `IstioCNI` CRs or subscribe to `servicemeshoperator3` by hand. Earlier revisions of this resolver instructed both; that was wrong and contradicted migration guide §2.8.10.1 (which says nothing about Sail or Istio CRs). On a *connected* cluster the SMv3 CSV appears in `openshift-operators` and reaches `Succeeded` without intervention. On a *disconnected* cluster, follow guide §2.8.10.2 to mirror the SMv3 image the Cluster Ingress Operator needs. If Kuadrant is stuck at `Ready=False / MissingDependency` on a connected cluster, the Cluster Ingress Operator itself is unhealthy — diagnose there, do not create Sail CRs by hand.
+> **Do not block on Kuadrant `Ready=True` pre-RHOAI-upgrade.** Kuadrant requires a Gateway API provider (Sail-managed Istio or Envoy Gateway). The OCP 4.19+ Cluster Ingress Operator carries the SMv3 install recipe (env vars `GATEWAY_API_OPERATOR_VERSION` / `_CHANNEL` / `_CATALOG` on the `ingress-operator` deployment) but only triggers the install once a `GatewayConfig` CR exists — which is created by the RHOAI 3.x operator post-upgrade. Pre-upgrade, Kuadrant typically sits at `Ready=False / MissingDependency: [Gateway API provider (istio / envoy gateway)] is not installed`. That is **expected** and does not block the migration: the rhai-cli `kuadrant-readiness` check is satisfied by the Kuadrant CR *existing*, not by it being `Ready=True`. On some clusters Kuadrant's reconciler accepts the Gateway API CRDs alone and reaches `Ready=True` pre-upgrade anyway; either state passes the lint. Earlier revisions of this resolver had `oc wait Kuadrant ... --for=condition=Ready --timeout=10m`; that times out on roughly half of pre-upgrade clusters and was misleading.
+
+> **Don't install Sail / Istio / IstioCNI CRs by hand.** Migration guide §2.8.10.1 doesn't include them and the OCP Cluster Ingress Operator owns the SMv3 install (connected) or expects the admin to mirror its image (disconnected, per §2.8.10.2). If Kuadrant is *still* `Ready=False` on a *post-upgrade* cluster, the Cluster Ingress Operator itself is unhealthy — diagnose there. Do not pre-install Sail.
 
 ### 1b. Enable TLS on the Authorino listener
 
