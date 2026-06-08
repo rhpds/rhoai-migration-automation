@@ -154,7 +154,6 @@ export INSTALL_BYON_IMAGESTREAM=0
 export INSTALL_KSERVE_SERVERLESS=0
 export INSTALL_KSERVE_MODELMESH=0
 export INSTALL_KSERVE_RAW=0
-export INSTALL_LLM_ISVC=0
 export INSTALL_RAY=0
 export INSTALL_KFTO=0
 export INSTALL_TRUSTYAI=0
@@ -202,9 +201,6 @@ fi
 if (( $(count_for_kind modelregistry) > 0 )); then
   export INSTALL_MODEL_REGISTRY=1
 fi
-if (( $(count_for_kind llminferenceservice) > 0 )); then
-  export INSTALL_LLM_ISVC=1
-fi
 
 # --- print summary -----------------------------------------------------------
 
@@ -234,7 +230,6 @@ printf '  %-30s %s\n' \
   INSTALL_KSERVE_SERVERLESS       "$INSTALL_KSERVE_SERVERLESS" \
   INSTALL_KSERVE_MODELMESH        "$INSTALL_KSERVE_MODELMESH" \
   INSTALL_KSERVE_RAW              "$INSTALL_KSERVE_RAW" \
-  INSTALL_LLM_ISVC                "$INSTALL_LLM_ISVC" \
   INSTALL_RAY                     "$INSTALL_RAY" \
   INSTALL_KFTO                    "$INSTALL_KFTO" \
   INSTALL_TRUSTYAI                "$INSTALL_TRUSTYAI" \

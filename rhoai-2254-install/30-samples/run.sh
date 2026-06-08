@@ -13,7 +13,6 @@ source "${SCRIPT_DIR}/../lib/common.sh"
 : "${INSTALL_KSERVE_SERVERLESS:=1}" # §2.8.7.1
 : "${INSTALL_KSERVE_MODELMESH:=1}"  # §2.8.7.2
 : "${INSTALL_KSERVE_RAW:=1}"        # §2.8 — RawDeployment scan path (no migration needed)
-: "${INSTALL_LLM_ISVC:=1}"          # §2.8.10
 : "${INSTALL_RAY:=1}"               # §2.7
 : "${INSTALL_KFTO:=1}"              # §2.9
 : "${INSTALL_TRUSTYAI:=1}"          # §2.5
@@ -52,7 +51,6 @@ run_sub "$INSTALL_KFTO"              kfto
 run_sub "$INSTALL_KSERVE_MODELMESH"  kserve-modelmesh
 run_sub "$INSTALL_KSERVE_SERVERLESS" kserve-serverless
 run_sub "$INSTALL_KSERVE_RAW"        kserve-raw
-run_sub "$INSTALL_LLM_ISVC"          llm-isvc
 
 if ((${#FAILED_SAMPLES[@]} > 0)); then
   warn "30-samples: finished with failures in: ${FAILED_SAMPLES[*]}"
