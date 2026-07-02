@@ -9,4 +9,5 @@ resources:
   - ../../apps/10-operators-serverless.yaml
   - ../../apps/10-operators-authorino.yaml
   - ../../apps/10-operators-rhoai.yaml
+  - ../../apps/10-installplan-approver.yaml
   - ../../apps/20-dsc.yaml

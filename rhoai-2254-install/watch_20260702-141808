@@ -1,0 +1,21 @@
+NAME                                  SYNC STATUS   HEALTH STATUS                                                                             
+rhoai-2254-dsc                        Unknown       Healthy                                                                                   
+rhoai-2254-operator-authorino         Unknown       Healthy                                                                                   
+rhoai-2254-operator-rhoai             Unknown       Progressing                                                                               
+rhoai-2254-operator-serverless        Unknown       Healthy                                                                                   
+rhoai-2254-operator-servicemesh-v2    Unknown       Healthy                                                                                   
+rhoai-2254-operators-namespaces       Unknown       Healthy                                                                                   
+rhoai-2254-root                       Synced        Healthy                                                                                   
+rhoai-2254-sample-byon-imagestream    Unknown       Healthy                                                                                   
+rhoai-2254-sample-feast               Unknown       Healthy                                                                                   
+rhoai-2254-sample-kfto                Unknown       Healthy                                                                                   
+rhoai-2254-sample-kserve-modelmesh    Unknown       Healthy                                                                                   
+rhoai-2254-sample-kserve-raw          Unknown       Healthy                                                                                   
+rhoai-2254-sample-kserve-serverless   Unknown       Healthy                                                                                   
+rhoai-2254-sample-llama-stack         Unknown       Healthy                                                                                   
+rhoai-2254-sample-model-registry      Unknown       Healthy                                                                                   
+rhoai-2254-sample-pipelines           Unknown       Healthy                                                                                   
+rhoai-2254-sample-ray                 Unknown       Healthy                                                                                   
+rhoai-2254-sample-trustyai            Unknown       Healthy                                                                                   
+rhoai-2254-sample-workbenches         Unknown       Healthy                                                                                   
+                                                                                                                                              

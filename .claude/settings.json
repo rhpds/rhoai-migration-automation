@@ -21,7 +21,19 @@
       "Bash(bash .claude/skills/rhoai-migrate-resolver/scripts/prereqs.sh)",
       "Edit(/.claude/skills/rhoai-migrate-resolver/**)",
       "Bash(oc exec *)",
-      "Bash(oc annotate *)"
+      "Bash(oc annotate *)",
+      "Bash(oc -n openshift-gitops get application rhoai-2254-root -o jsonpath='{.status.conditions}')",
+      "Bash(oc -n openshift-gitops get application rhoai-2254-root -o jsonpath='{.spec.source}')",
+      "Bash(oc -n openshift-gitops get application rhoai-2254-root -o jsonpath='sync.status={.status.sync.status}{\"\\\\n\"}sync.revision={.status.sync.revision}{\"\\\\n\"}operationState.phase={.status.operationState.phase}{\"\\\\n\"}operationState.message={.status.operationState.message}{\"\\\\n\"}')",
+      "Bash(oc -n openshift-gitops get applications.argoproj.io)",
+      "Bash(oc -n openshift-gitops get application rhoai-2254-operators-namespaces -o jsonpath='spec.source.repoURL={.spec.source.repoURL}{\"\\\\n\"}spec.source.targetRevision={.spec.source.targetRevision}{\"\\\\n\"}spec.source.path={.spec.source.path}{\"\\\\n\"}')",
+      "Bash(chmod +x /Users/phayes/projects/rhoai-migrations/rhoai-2254-install/gitops/uninstall.sh)",
+      "Bash(bash -n /Users/phayes/projects/rhoai-migrations/rhoai-2254-install/gitops/bootstrap.sh)",
+      "Bash(bash -n /Users/phayes/projects/rhoai-migrations/rhoai-2254-install/gitops/render.sh)",
+      "Bash(bash -n /Users/phayes/projects/rhoai-migrations/rhoai-2254-install/gitops/uninstall.sh)",
+      "Bash(oc -n redhat-ods-operator get job approve-rhoai-installplan -o jsonpath='succeeded={.status.succeeded} failed={.status.failed} active={.status.active}{\"\\\\n\"}')",
+      "Bash(oc -n openshift-gitops get application rhoai-2254-dsc -o jsonpath='sync={.status.sync.status} phase={.status.operationState.phase} msg={.status.operationState.message}{\"\\\\n\"}')",
+      "Bash(oc -n openshift-gitops get application rhoai-2254-dsc -o jsonpath='{.status.conditions}')"
     ]
   }
 }

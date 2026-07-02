@@ -1,13 +1,16 @@
 ---
 # The RHOAI 2.25.6 Subscription uses installPlanApproval=Manual + startingCSV=2.25.6
 # to pin the channel at the pre-migration version. The bash install approves the
-# initial InstallPlan with approve_installplan(); ArgoCD needs to do the same thing
-# as a sync hook, otherwise the CSV never installs and every downstream sync wave
-# (DSC, samples) sits waiting for CRDs that never appear.
+# initial InstallPlan with approve_installplan(); Argo CD needs to do the same.
 #
-# This Job is rendered into the 10-operators-rhoai Application. It runs as a PostSync
-# hook so it executes after the Subscription has been applied. The Job approves every
-# unapproved InstallPlan in redhat-ods-operator; it is idempotent and safe to re-run.
+# History note: this Job was originally a PostSync hook on the RHOAI Application.
+# That deadlocks — the Subscription's health check reports Healthy only after the
+# CSV is Succeeded, and the CSV can't become Succeeded until the InstallPlan is
+# approved. Argo CD only fires PostSync hooks after the Application is Synced AND
+# Healthy, so the Job never runs. Fixed by making this a plain resource in its
+# own Application (rhoai-2254-installplan-approver, sync-wave 6) which syncs
+# independently. The Job polls for the InstallPlan and approves it as soon as OLM
+# creates it. Idempotent; safe to re-run.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -43,9 +46,6 @@ kind: Job
 metadata:
   name: approve-rhoai-installplan
   namespace: redhat-ods-operator
-  annotations:
-    argocd.argoproj.io/hook: PostSync
-    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
 spec:
   backoffLimit: 20
   ttlSecondsAfterFinished: 600

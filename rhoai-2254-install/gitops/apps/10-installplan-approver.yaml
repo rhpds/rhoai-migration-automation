@@ -1,0 +1,37 @@
+---
+# Wave 6: standalone Application that applies the InstallPlan-approval Job. Runs
+# after the RHOAI Subscription (wave 5) has been applied but independent of its
+# health, so it isn't gated by the CSV chicken-and-egg described in
+# gitops/hooks/approve-installplan.yaml. The Job polls for the InstallPlan and
+# approves it as soon as OLM creates it; this unblocks the RHOAI CSV, which in
+# turn unblocks wave 10 (DSC) and wave 20 (samples).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rhoai-2254-installplan-approver
+  namespace: openshift-gitops
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/rh-aiservices-bu/rhoai-2.25-baseline.git
+    targetRevision: main
+    path: rhoai-2254-install/gitops/hooks
+    directory:
+      include: "approve-installplan.yaml"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: redhat-ods-operator
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+    retry:
+      limit: 10
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 2m
