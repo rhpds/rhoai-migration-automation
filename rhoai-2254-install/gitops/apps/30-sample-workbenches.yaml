@@ -23,6 +23,10 @@ spec:
       prune: true
     syncOptions:
       - CreateNamespace=true
+      # The Kubeflow Notebook controller defaults image tags, adds oauth-proxy
+      # sidecar spec, and injects PVC volumes. SSA tracks operator field
+      # ownership so those additions don't register as drift.
+      - ServerSideApply=true
     retry:
       limit: 15
       backoff:

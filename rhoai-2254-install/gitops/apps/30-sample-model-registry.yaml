@@ -24,6 +24,10 @@ spec:
     automated:
       selfHeal: true
       prune: true
+    syncOptions:
+      # The ModelRegistry operator defaults grpc.port/rest.port and adds
+      # rest.serviceRoute; SSA prevents this from registering as drift.
+      - ServerSideApply=true
     retry:
       limit: 20
       backoff:

@@ -23,6 +23,10 @@ spec:
       prune: true
     syncOptions:
       - CreateNamespace=true
+      # CodeFlare mutates RayCluster specs post-creation (adds TLS env vars,
+      # cert volume mounts, container defaults). SSA tracks field ownership so
+      # operator-managed fields don't register as drift.
+      - ServerSideApply=true
     retry:
       limit: 15
       backoff:
