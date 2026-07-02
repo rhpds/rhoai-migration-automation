@@ -46,6 +46,17 @@ fi
 log()  { echo "[bootstrap] $*"; }
 die()  { echo "[bootstrap] ERROR: $*" >&2; exit 1; }
 
+# Argo CD reads apps/*.yaml directly from Git; their repoURL/targetRevision
+# have to be committed with real values (envsubst can't reach them). Reject
+# early if the placeholders are still in place — that means render.sh either
+# hasn't been run or its output wasn't committed and pushed.
+if grep -q '\${REPO_URL}' "${SCRIPT_DIR}/apps/"*.yaml 2>/dev/null; then
+  die "gitops/apps/*.yaml still contains \${REPO_URL} placeholders. Run:
+    ./gitops/render.sh
+    git add gitops/apps && git commit -m 'render apps' && git push
+  then re-run bootstrap.sh."
+fi
+
 oc whoami >/dev/null 2>&1 || die "not logged in to a cluster (oc whoami failed)"
 
 log "installing OpenShift GitOps operator (if absent)"
@@ -63,6 +74,11 @@ oc -n openshift-gitops rollout status deploy/openshift-gitops-server --timeout=3
 
 log "granting cluster-admin to the Argo CD application controller"
 oc apply -f "${SCRIPT_DIR}/bootstrap/10-argocd-rbac.yaml"
+
+log "patching ArgoCD CR with --load-restrictor=LoadRestrictionsNone (kustomize overlays need this)"
+oc apply -f "${SCRIPT_DIR}/bootstrap/15-argocd-config.yaml"
+oc -n openshift-gitops rollout status deploy/openshift-gitops-repo-server --timeout=180s \
+  || die "openshift-gitops-repo-server did not restart after config patch"
 
 log "rendering root Application (REPO_URL=${REPO_URL}, TARGET_REVISION=${TARGET_REVISION}, OVERLAY=${OVERLAY})"
 export REPO_URL TARGET_REVISION OVERLAY

@@ -1,0 +1,15 @@
+---
+# Kustomize refuses to load `resources:` entries above the current overlay
+# directory (LoadRestrictionsRootOnly, the default). The overlays under
+# gitops/overlays/*/kustomization.yaml reference Applications in ../../apps/,
+# which trips this check with "file is not in or below overlay". Setting
+# LoadRestrictionsNone on the ArgoCD instance disables the restriction for
+# every Application the repo-server builds. bootstrap.sh applies this after
+# the operator has created the openshift-gitops ArgoCD CR.
+apiVersion: argoproj.io/v1beta1
+kind: ArgoCD
+metadata:
+  name: openshift-gitops
+  namespace: openshift-gitops
+spec:
+  kustomizeBuildOptions: "--load-restrictor=LoadRestrictionsNone"

@@ -17,13 +17,13 @@ metadata:
 spec:
   project: default
   sources:
-    - repoURL: ${REPO_URL}
-      targetRevision: ${TARGET_REVISION}
+    - repoURL: https://github.com/rh-aiservices-bu/rhoai-2.25-baseline.git
+      targetRevision: main
       path: rhoai-2254-install/10-operators
       directory:
         include: "rhoai-operator.yaml"
-    - repoURL: ${REPO_URL}
-      targetRevision: ${TARGET_REVISION}
+    - repoURL: https://github.com/rh-aiservices-bu/rhoai-2.25-baseline.git
+      targetRevision: main
       path: rhoai-2254-install/gitops/hooks
       directory:
         include: "approve-installplan.yaml"

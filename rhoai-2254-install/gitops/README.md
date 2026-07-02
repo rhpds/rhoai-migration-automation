@@ -11,8 +11,10 @@ the optional sample workloads.
 ```
 gitops/
 ├── bootstrap.sh            ← one-shot driver (installs GitOps + applies root app)
+├── render.sh               ← seds REPO_URL/TARGET_REVISION into apps/*.yaml (run per fork)
+├── uninstall.sh            ← tears down Applications, OpenShift GitOps, RHOAI, samples
 ├── .env.example            ← copy to .env to set REPO_URL / TARGET_REVISION / OVERLAY
-├── bootstrap/              ← cluster prereqs (GitOps operator, RBAC, root Application)
+├── bootstrap/              ← cluster prereqs (GitOps operator, ArgoCD config, RBAC, root Application)
 ├── apps/                   ← one Argo CD Application per phase / per sample
 ├── overlays/
 │   ├── all/                ← full pre-migration state (parity with install.sh defaults)
@@ -48,7 +50,7 @@ and re-sync until the CRD lands.
 
 ## Bootstrap
 
-1. Push this repo to a Git remote Argo CD can reach.
+1. Fork this repo to a Git remote Argo CD can reach.
 2. Set the env vars (either inline or in `.env`):
 
    ```sh
@@ -56,7 +58,21 @@ and re-sync until the CRD lands.
    $EDITOR gitops/.env       # set REPO_URL at minimum
    ```
 
-3. Log in to the cluster as `cluster-admin` and run:
+3. Bake the repo URL and revision into `apps/*.yaml`, then commit + push:
+
+   ```sh
+   ./gitops/render.sh                      # writes REPO_URL/TARGET_REVISION into gitops/apps/*.yaml
+   git add gitops/apps
+   git commit -m "gitops: render apps for <your-fork>"
+   git push
+   ```
+
+   Argo CD reads `apps/*.yaml` directly from Git via kustomize — placeholder
+   values (`${REPO_URL}`) can't be substituted at bootstrap time because
+   `envsubst` never sees those files. `render.sh` handles this once per fork
+   and is idempotent, so re-running it after changing `.env` is safe.
+
+4. Log in to the cluster as `cluster-admin` and run:
 
    ```sh
    ./gitops/bootstrap.sh
@@ -99,6 +115,19 @@ picked up by **both** paths automatically. The GitOps-specific files are:
 Running `install.sh` after a GitOps bootstrap (or vice versa) is safe — both are
 idempotent `oc apply` — but Argo CD will mark anything that drifts from Git as
 `OutOfSync` and (if automated sync is on) revert it on the next reconcile loop.
+
+## Why the ArgoCD instance is patched
+
+`gitops/bootstrap/15-argocd-config.yaml` sets `kustomizeBuildOptions:
+"--load-restrictor=LoadRestrictionsNone"` on the openshift-gitops ArgoCD CR.
+Kustomize's default `LoadRestrictionsRootOnly` forbids `resources:` entries
+that reference files above the kustomization directory — the overlays here
+reference `../../apps/*.yaml`, which trips that check. Setting
+`LoadRestrictionsNone` disables the restriction globally on the ArgoCD
+repo-server. If your platform team runs a shared openshift-gitops instance and
+this patch is unacceptable, refactor the overlays into self-contained
+directories (copy the Application YAMLs directly into each overlay) so no
+`..` traversal is needed.
 
 ## Limitations
 

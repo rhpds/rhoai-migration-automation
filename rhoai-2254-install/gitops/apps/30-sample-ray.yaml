@@ -11,8 +11,8 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: ${REPO_URL}
-    targetRevision: ${TARGET_REVISION}
+    repoURL: https://github.com/rh-aiservices-bu/rhoai-2.25-baseline.git
+    targetRevision: main
     path: rhoai-2254-install/30-samples/ray
   destination:
     server: https://kubernetes.default.svc
