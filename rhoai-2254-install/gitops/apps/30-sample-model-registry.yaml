@@ -20,13 +20,20 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: rhoai-model-registries
+  # The ModelRegistry operator defaults grpc.port, rest.port, rest.serviceRoute,
+  # and re-orders mysql fields on every reconcile. SSA alone can't win because
+  # git declares `grpc: {}` / `rest: {}` (required by the CRD schema) and
+  # ArgoCD owns those empty maps. Delegate .spec authority to the operator.
+  ignoreDifferences:
+    - group: modelregistry.opendatahub.io
+      kind: ModelRegistry
+      jsonPointers:
+        - /spec
   syncPolicy:
     automated:
       selfHeal: true
       prune: true
     syncOptions:
-      # The ModelRegistry operator defaults grpc.port/rest.port and adds
-      # rest.serviceRoute; SSA prevents this from registering as drift.
       - ServerSideApply=true
     retry:
       limit: 20
