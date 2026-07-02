@@ -1,0 +1,31 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rhoai-2254-sample-ray
+  namespace: openshift-gitops
+  annotations:
+    argocd.argoproj.io/sync-wave: "20"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: ${REPO_URL}
+    targetRevision: ${TARGET_REVISION}
+    path: rhoai-2254-install/30-samples/ray
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: raytest
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 15
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m

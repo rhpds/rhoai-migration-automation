@@ -1,0 +1,33 @@
+---
+# Root app-of-apps. Points at one of the overlays under gitops/overlays/.
+# bootstrap.sh substitutes REPO_URL, TARGET_REVISION, and OVERLAY at apply time;
+# you can also commit this file with values filled in if you don't want the wrapper.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rhoai-2254-root
+  namespace: openshift-gitops
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: ${REPO_URL}
+    targetRevision: ${TARGET_REVISION}
+    path: rhoai-2254-install/gitops/overlays/${OVERLAY}
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: openshift-gitops
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m

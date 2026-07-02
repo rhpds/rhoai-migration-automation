@@ -1,0 +1,25 @@
+---
+# Overlay "all" — full pre-migration state, parity with the bash install.sh defaults
+# (every INSTALL_* flag = 1, every DSC component Managed). This is what bootstrap.sh
+# selects when OVERLAY is unset.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../apps/10-operators-namespaces.yaml
+  - ../../apps/10-operators-servicemesh.yaml
+  - ../../apps/10-operators-serverless.yaml
+  - ../../apps/10-operators-authorino.yaml
+  - ../../apps/10-operators-rhoai.yaml
+  - ../../apps/20-dsc.yaml
+  - ../../apps/30-sample-workbenches.yaml
+  - ../../apps/30-sample-byon-imagestream.yaml
+  - ../../apps/30-sample-kserve-serverless.yaml
+  - ../../apps/30-sample-kserve-modelmesh.yaml
+  - ../../apps/30-sample-kserve-raw.yaml
+  - ../../apps/30-sample-ray.yaml
+  - ../../apps/30-sample-kfto.yaml
+  - ../../apps/30-sample-trustyai.yaml
+  - ../../apps/30-sample-pipelines.yaml
+  - ../../apps/30-sample-feast.yaml
+  - ../../apps/30-sample-llama-stack.yaml
+  - ../../apps/30-sample-model-registry.yaml

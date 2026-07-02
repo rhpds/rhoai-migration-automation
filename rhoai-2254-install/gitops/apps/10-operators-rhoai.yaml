@@ -1,0 +1,42 @@
+---
+# Wave 5: RHOAI 2.25.6 operator. The Subscription pins startingCSV=2.25.6 with
+# installPlanApproval=Manual so OLM does not auto-upgrade. The PostSync Job at
+# gitops/hooks/approve-installplan.yaml approves the initial InstallPlan so the
+# 2.25.6 CSV actually installs; future upgrade plans still require manual approval.
+# This Application's source is a multi-source spec: it pulls both the existing
+# rhoai-operator.yaml from 10-operators/ and the approval hook from gitops/hooks/.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rhoai-2254-operator-rhoai
+  namespace: openshift-gitops
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    - repoURL: ${REPO_URL}
+      targetRevision: ${TARGET_REVISION}
+      path: rhoai-2254-install/10-operators
+      directory:
+        include: "rhoai-operator.yaml"
+    - repoURL: ${REPO_URL}
+      targetRevision: ${TARGET_REVISION}
+      path: rhoai-2254-install/gitops/hooks
+      directory:
+        include: "approve-installplan.yaml"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: redhat-ods-operator
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+    retry:
+      limit: 15
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m

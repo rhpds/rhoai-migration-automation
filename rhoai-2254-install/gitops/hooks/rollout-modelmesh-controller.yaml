@@ -1,0 +1,66 @@
+---
+# PostSync hook for the ModelMesh sample. The sample applies a model-serving-config
+# ConfigMap with allowAnyPVC=true + podsPerRuntime=1 that the controller only reads
+# at startup; restart the controller so the new values take effect.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: modelmesh-controller-rollout
+  namespace: redhat-ods-applications
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: modelmesh-controller-rollout
+  namespace: redhat-ods-applications
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/status"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: modelmesh-controller-rollout
+  namespace: redhat-ods-applications
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: modelmesh-controller-rollout
+subjects:
+  - kind: ServiceAccount
+    name: modelmesh-controller-rollout
+    namespace: redhat-ods-applications
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rollout-modelmesh-controller
+  namespace: redhat-ods-applications
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      serviceAccountName: modelmesh-controller-rollout
+      restartPolicy: OnFailure
+      containers:
+        - name: rollout
+          image: registry.redhat.io/openshift4/ose-cli:latest
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              if ! oc -n redhat-ods-applications get deploy modelmesh-controller >/dev/null 2>&1; then
+                echo "modelmesh-controller deployment not found; nothing to do"
+                exit 0
+              fi
+              oc -n redhat-ods-applications rollout restart deploy/modelmesh-controller
+              oc -n redhat-ods-applications rollout status deploy/modelmesh-controller --timeout=180s

@@ -1,0 +1,33 @@
+---
+# Wave 10: DSCInitialization + DataScienceCluster. Sourced from gitops/manifests/20-dsc/
+# (envsubst-rendered defaults: every component Managed, KServe Serverless mode).
+# The Application retries until the RHOAI operator's CRDs are ready — the sync wave
+# only enforces ordering, not readiness of dependent CRDs.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rhoai-2254-dsc
+  namespace: openshift-gitops
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: ${REPO_URL}
+    targetRevision: ${TARGET_REVISION}
+    path: rhoai-2254-install/gitops/manifests/20-dsc
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: redhat-ods-applications
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: false
+    retry:
+      limit: 20
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m

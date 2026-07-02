@@ -1,0 +1,40 @@
+---
+# The ModelMesh sample applies a model-serving-config ConfigMap with
+# allowAnyPVC=true and podsPerRuntime=1; the modelmesh-controller only reads
+# those values at startup. A PostSync hook rolls the controller so the ISVC
+# can mount its PVC. Without this rollout the model never becomes Ready.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rhoai-2254-sample-kserve-modelmesh
+  namespace: openshift-gitops
+  annotations:
+    argocd.argoproj.io/sync-wave: "20"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    - repoURL: ${REPO_URL}
+      targetRevision: ${TARGET_REVISION}
+      path: rhoai-2254-install/30-samples/kserve-modelmesh
+    - repoURL: ${REPO_URL}
+      targetRevision: ${TARGET_REVISION}
+      path: rhoai-2254-install/gitops/hooks
+      directory:
+        include: "rollout-modelmesh-controller.yaml"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ml-project-c
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 15
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m

@@ -1,0 +1,12 @@
+---
+# Overlay "minimal" — operators + DSC only, no sample workloads. Useful when you
+# want a clean RHOAI 2.25.6 install and will deploy samples some other way.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../apps/10-operators-namespaces.yaml
+  - ../../apps/10-operators-servicemesh.yaml
+  - ../../apps/10-operators-serverless.yaml
+  - ../../apps/10-operators-authorino.yaml
+  - ../../apps/10-operators-rhoai.yaml
+  - ../../apps/20-dsc.yaml

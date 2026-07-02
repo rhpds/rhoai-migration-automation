@@ -1,0 +1,48 @@
+---
+# Pre-migration DataScienceCluster with defaults baked in (every component Managed,
+# KServe defaultDeploymentMode=Serverless). Mirrors the env-var defaults from the
+# bash 20-dsc/run.sh. Override by editing this file or via a Kustomize patch.
+apiVersion: datasciencecluster.opendatahub.io/v1
+kind: DataScienceCluster
+metadata:
+  name: default-dsc
+  labels:
+    app.kubernetes.io/name: datasciencecluster
+spec:
+  components:
+    codeflare:
+      managementState: Managed
+    dashboard:
+      managementState: Managed
+    datasciencepipelines:
+      managementState: Managed
+    kserve:
+      managementState: Managed
+      defaultDeploymentMode: Serverless
+      serving:
+        managementState: Managed
+        name: knative-serving
+        ingressGateway:
+          certificate:
+            type: OpenshiftDefaultIngress
+      nim:
+        managementState: Managed
+    kueue:
+      managementState: Managed
+    modelmeshserving:
+      managementState: Managed
+    modelregistry:
+      managementState: Managed
+      registriesNamespace: rhoai-model-registries
+    ray:
+      managementState: Managed
+    trainingoperator:
+      managementState: Managed
+    trustyai:
+      managementState: Managed
+    workbenches:
+      managementState: Managed
+    feastoperator:
+      managementState: Managed
+    llamastackoperator:
+      managementState: Managed

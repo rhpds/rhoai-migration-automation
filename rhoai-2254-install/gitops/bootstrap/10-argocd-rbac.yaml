@@ -1,0 +1,18 @@
+---
+# The openshift-gitops Argo CD controller runs as the openshift-gitops-argocd-application-controller
+# ServiceAccount. Granting it cluster-admin keeps the GitOps path on parity with the bash install
+# (which runs as the invoking cluster-admin user). Installing operators, creating DSCInitialization,
+# applying ImageStreams in redhat-ods-applications, and patching cluster-scoped resources all need
+# this scope; narrowing it would require a long, brittle Role list that diverges from the bash path.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: openshift-gitops-cluster-admin
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: openshift-gitops-argocd-application-controller
+    namespace: openshift-gitops

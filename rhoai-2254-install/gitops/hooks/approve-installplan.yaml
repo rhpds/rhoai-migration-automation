@@ -1,0 +1,80 @@
+---
+# The RHOAI 2.25.6 Subscription uses installPlanApproval=Manual + startingCSV=2.25.6
+# to pin the channel at the pre-migration version. The bash install approves the
+# initial InstallPlan with approve_installplan(); ArgoCD needs to do the same thing
+# as a sync hook, otherwise the CSV never installs and every downstream sync wave
+# (DSC, samples) sits waiting for CRDs that never appear.
+#
+# This Job is rendered into the 10-operators-rhoai Application. It runs as a PostSync
+# hook so it executes after the Subscription has been applied. The Job approves every
+# unapproved InstallPlan in redhat-ods-operator; it is idempotent and safe to re-run.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: installplan-approver
+  namespace: redhat-ods-operator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: installplan-approver
+  namespace: redhat-ods-operator
+rules:
+  - apiGroups: ["operators.coreos.com"]
+    resources: ["installplans"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: installplan-approver
+  namespace: redhat-ods-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: installplan-approver
+subjects:
+  - kind: ServiceAccount
+    name: installplan-approver
+    namespace: redhat-ods-operator
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: approve-rhoai-installplan
+  namespace: redhat-ods-operator
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 20
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      serviceAccountName: installplan-approver
+      restartPolicy: OnFailure
+      containers:
+        - name: approve
+          image: registry.redhat.io/openshift4/ose-cli:latest
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              # Wait until at least one InstallPlan exists, then approve any that
+              # are still spec.approved=false. Loop bounded so the Job eventually
+              # exits even if no InstallPlan ever appears (e.g. Subscription failed).
+              for _ in $(seq 1 60); do
+                plans=$(oc get installplan -n redhat-ods-operator -o name 2>/dev/null || true)
+                if [[ -n "$plans" ]]; then
+                  break
+                fi
+                sleep 10
+              done
+              for plan in $(oc get installplan -n redhat-ods-operator \
+                  -o jsonpath='{range .items[?(@.spec.approved==false)]}{.metadata.name}{"\n"}{end}'); do
+                echo "approving InstallPlan/${plan}"
+                oc patch installplan -n redhat-ods-operator "$plan" \
+                  --type=merge -p '{"spec":{"approved":true}}'
+              done
+              echo "done"

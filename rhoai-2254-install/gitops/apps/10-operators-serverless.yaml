@@ -1,0 +1,32 @@
+---
+# Wave 0: OpenShift Serverless operator.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rhoai-2254-operator-serverless
+  namespace: openshift-gitops
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: ${REPO_URL}
+    targetRevision: ${TARGET_REVISION}
+    path: rhoai-2254-install/10-operators
+    directory:
+      include: "serverless.yaml"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: openshift-serverless
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m

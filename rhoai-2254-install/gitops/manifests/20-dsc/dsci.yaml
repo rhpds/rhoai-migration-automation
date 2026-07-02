@@ -1,0 +1,24 @@
+---
+# Pre-migration DSCInitialization with defaults baked in (serviceMesh=Managed).
+# The bash install renders this from 20-dsc/dsci.yaml via envsubst; the GitOps
+# install ships the rendered defaults directly. Override by editing this file
+# in your fork or via a Kustomize patch in your overlay.
+apiVersion: dscinitialization.opendatahub.io/v1
+kind: DSCInitialization
+metadata:
+  name: default-dsci
+spec:
+  applicationsNamespace: redhat-ods-applications
+  monitoring:
+    managementState: Managed
+    namespace: redhat-ods-monitoring
+    metrics: {}
+  serviceMesh:
+    managementState: Managed
+    controlPlane:
+      name: data-science-smcp
+      namespace: istio-system
+      metricsCollection: Istio
+  trustedCABundle:
+    managementState: Managed
+    customCABundle: ""
