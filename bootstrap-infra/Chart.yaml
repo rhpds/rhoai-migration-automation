@@ -1,0 +1,5 @@
+apiVersion: v2
+name: bootstrap-infra
+description: RHOAI 2.25 pre-migration cluster bootstrap
+version: 0.1.0
+type: application
