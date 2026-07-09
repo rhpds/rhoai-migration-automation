@@ -1,6 +1,13 @@
 ---
 # Standalone Authorino Operator (not Red Hat Connectivity Link).
 # Required by RHOAI 2.25.6 for KServe Serverless auth — replaced by RHCL during migration to 3.3.3.
+#
+# Pinned to v1.2.4 (last CSV that still serves authorino.kuadrant.io/v1beta2).
+# Newer CSVs (v1.3.x+) drop v1beta2 and break RHOAI 2.25.x odh-model-controller,
+# which hardcodes v1beta2 when creating per-ISVC AuthConfigs. Without the AuthConfig,
+# Authorino returns 404 "Service not found" for every model request through the ingress.
+# The subscription uses Manual approval so future InstallPlans (v1.3.x, v1.4.x) require
+# explicit approval and won't silently break the mesh.
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
 metadata:
@@ -11,4 +18,5 @@ spec:
   name: authorino-operator
   source: redhat-operators
   sourceNamespace: openshift-marketplace
-  installPlanApproval: Automatic
+  startingCSV: authorino-operator.v1.2.4
+  installPlanApproval: Manual
