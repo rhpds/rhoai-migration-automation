@@ -1,0 +1,36 @@
+---
+# Wave 6: standalone Application that applies the Authorino InstallPlan-approval
+# Job. Runs after the Authorino Subscription (wave 0) has been applied. The Job
+# approves only the InstallPlan for authorino-operator.v1.2.4 — future upgrade
+# plans (v1.3.x, v1.4.x — which drop authorino.kuadrant.io/v1beta2) stay
+# pending, protecting the pin against accidental channel-head advance.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rhoai-2254-authorino-installplan-approver
+  namespace: openshift-gitops
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/rh-aiservices-bu/rhoai-2.25-baseline.git
+    targetRevision: main
+    path: rhoai-2254-install/gitops/hooks
+    directory:
+      include: "approve-authorino-installplan.yaml"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: openshift-operators
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+    retry:
+      limit: 10
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 2m
