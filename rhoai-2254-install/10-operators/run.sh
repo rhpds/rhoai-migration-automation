@@ -41,7 +41,12 @@ fi
 
 if [[ "$INSTALL_AUTHORINO_STANDALONE" == "1" ]]; then
   apply_manifest "${SCRIPT_DIR}/authorino.yaml"
-  wait_for_csv_succeeded openshift-operators authorino-operator 600
+  # Subscription uses installPlanApproval=Manual with startingCSV=authorino-operator.v1.2.4
+  # to keep authorino.kuadrant.io/v1beta2 served for RHOAI 2.25.x odh-model-controller.
+  # Filter on the CSV prefix so we don't accidentally approve an in-flight Automatic
+  # InstallPlan for one of the other openshift-operators subs.
+  approve_installplan openshift-operators 600 authorino-operator
+  wait_for_csv_succeeded openshift-operators authorino-operator.v1.2.4 600
 else
   log "INSTALL_AUTHORINO_STANDALONE=0 — skipping standalone Authorino"
 fi

@@ -46,6 +46,10 @@ apply_dir() {
 
 wait_for_csv_succeeded() {
   local ns="$1" csv_prefix="$2" timeout="${3:-900}"
+  # Operator "family" — strip the pinned version so we can fall back to detecting a
+  # higher version of the same operator that's already Succeeded (e.g. rhods-operator.2.25.6
+  # requested but rhods-operator.2.26.0 already installed).
+  local family="${csv_prefix%%.[0-9]*}"
   log "waiting for CSV ${csv_prefix}* in ns/${ns} to reach Succeeded (timeout ${timeout}s)"
   local deadline=$(( $(date +%s) + timeout ))
   while (( $(date +%s) < deadline )); do
@@ -58,6 +62,17 @@ wait_for_csv_succeeded() {
         return 0
       fi
       [[ -n "$phase" ]] && log "  ${csv} phase=${phase}"
+    elif [[ "$family" != "$csv_prefix" ]]; then
+      # Pinned version isn't present — check for a different version of the same operator
+      # family already at Succeeded (operator already at a higher version).
+      local higher
+      higher=$(oc -n "$ns" get csv -o json 2>/dev/null \
+        | jq -r --arg fam "$family" '.items[] | select(.metadata.name | startswith($fam+".")) | select(.status.phase=="Succeeded") | .metadata.name' \
+        | head -n1 || true)
+      if [[ -n "$higher" ]]; then
+        log "  pinned ${csv_prefix}* not found; ${higher} already Succeeded — operator already at a higher version"
+        return 0
+      fi
     fi
     sleep 10
   done
@@ -66,23 +81,45 @@ wait_for_csv_succeeded() {
 
 approve_installplan() {
   # Approves the first pending InstallPlan in the namespace — used for Manual subscriptions
-  # where we want to pin the installed CSV.
-  local ns="$1" timeout="${2:-300}"
-  log "waiting for pending InstallPlan in ns/${ns} (timeout ${timeout}s)"
+  # where we want to pin the installed CSV. If no pending InstallPlan appears but a
+  # Complete one already exists, treat it as already-installed and return success.
+  # Optional third arg: CSV name prefix to filter on. Required when the namespace hosts
+  # multiple subscriptions and only one is Manual (e.g. openshift-operators has
+  # servicemesh/kiali/serverless on Automatic + authorino on Manual).
+  local ns="$1" timeout="${2:-300}" csv_prefix="${3:-}"
+  local jq_filter='.items[] | select(.spec.approved==false) | .metadata.name'
+  if [[ -n "$csv_prefix" ]]; then
+    jq_filter='.items[] | select(.spec.approved==false) | select(any(.spec.clusterServiceVersionNames[]; startswith($p))) | .metadata.name'
+  fi
+  local jq_complete='.items[] | select(.status.phase=="Complete") | .metadata.name'
+  if [[ -n "$csv_prefix" ]]; then
+    jq_complete='.items[] | select(.status.phase=="Complete") | select(any(.spec.clusterServiceVersionNames[]; startswith($p))) | .metadata.name'
+  fi
+  log "waiting for pending InstallPlan in ns/${ns}${csv_prefix:+ for ${csv_prefix}*} (timeout ${timeout}s)"
   local deadline=$(( $(date +%s) + timeout ))
   while (( $(date +%s) < deadline )); do
+    local plans_json
+    plans_json=$(oc -n "$ns" get installplan -o json 2>/dev/null || echo '{"items":[]}')
     local ip
-    ip=$(oc -n "$ns" get installplan -o json 2>/dev/null \
-      | jq -r '.items[] | select(.spec.approved==false) | .metadata.name' \
+    ip=$(echo "$plans_json" \
+      | jq -r --arg p "$csv_prefix" "$jq_filter" \
       | head -n1 || true)
     if [[ -n "$ip" ]]; then
       log "  approving InstallPlan ${ip}"
       oc -n "$ns" patch installplan "$ip" --type=merge -p '{"spec":{"approved":true}}'
       return 0
     fi
+    local completed
+    completed=$(echo "$plans_json" \
+      | jq -r --arg p "$csv_prefix" "$jq_complete" \
+      | head -n1 || true)
+    if [[ -n "$completed" ]]; then
+      log "  no pending InstallPlan; ${completed} already Complete — operator already installed/upgraded"
+      return 0
+    fi
     sleep 5
   done
-  die "no pending InstallPlan appeared in ns/${ns}"
+  die "no pending InstallPlan appeared in ns/${ns}${csv_prefix:+ for ${csv_prefix}*}"
 }
 
 wait_for_crd() {

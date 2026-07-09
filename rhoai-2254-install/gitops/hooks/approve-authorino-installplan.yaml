@@ -1,0 +1,88 @@
+---
+# Approves only the InstallPlan for authorino-operator.v1.2.4 in openshift-operators.
+# Later InstallPlans for v1.3.x / v1.4.x (which drop the authorino.kuadrant.io/v1beta2
+# API that RHOAI 2.25.x odh-model-controller hardcodes) stay pending, so an accidental
+# channel-head advance can't silently break every ISVC's auth.
+#
+# Separate from approve-installplan.yaml (which targets redhat-ods-operator) because
+# openshift-operators hosts many Subscriptions and a wildcard approver here would
+# happily approve *any* future upgrade plan for *any* operator sharing the namespace.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: authorino-installplan-approver
+  namespace: openshift-operators
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: authorino-installplan-approver
+  namespace: openshift-operators
+rules:
+  - apiGroups: ["operators.coreos.com"]
+    resources: ["installplans"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: authorino-installplan-approver
+  namespace: openshift-operators
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: authorino-installplan-approver
+subjects:
+  - kind: ServiceAccount
+    name: authorino-installplan-approver
+    namespace: openshift-operators
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: approve-authorino-installplan
+  namespace: openshift-operators
+spec:
+  backoffLimit: 20
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      serviceAccountName: authorino-installplan-approver
+      restartPolicy: OnFailure
+      containers:
+        - name: approve
+          image: registry.redhat.io/openshift4/ose-cli:latest
+          env:
+            - name: TARGET_CSV
+              value: "authorino-operator.v1.2.4"
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              # Wait up to 10 minutes for the InstallPlan targeting TARGET_CSV
+              # to appear (OLM creates it after ArgoCD applies the Subscription).
+              for _ in $(seq 1 60); do
+                plans=$(oc get installplan -n openshift-operators -o name 2>/dev/null || true)
+                if [[ -n "$plans" ]]; then
+                  break
+                fi
+                sleep 10
+              done
+              # Approve only plans whose spec.clusterServiceVersionNames array
+              # contains TARGET_CSV exactly. Any other pending plan (including
+              # upgrade plans for v1.3.x/v1.4.x, or plans for unrelated operators)
+              # is left alone.
+              for plan in $(oc get installplan -n openshift-operators \
+                  -o jsonpath='{range .items[?(@.spec.approved==false)]}{.metadata.name}{"\n"}{end}'); do
+                csvs=$(oc get installplan -n openshift-operators "$plan" \
+                  -o jsonpath='{.spec.clusterServiceVersionNames}')
+                if [[ "$csvs" == *"$TARGET_CSV"* ]]; then
+                  echo "approving InstallPlan/${plan} (CSVs: ${csvs})"
+                  oc patch installplan -n openshift-operators "$plan" \
+                    --type=merge -p '{"spec":{"approved":true}}'
+                else
+                  echo "skipping InstallPlan/${plan} (CSVs: ${csvs} — not ${TARGET_CSV})"
+                fi
+              done
+              echo "done"
