@@ -75,6 +75,14 @@ oc get llminferenceservices --all-namespaces
 
 **Resolution:** Same KB article above. Must be recreated against a single-model ServingRuntime (`spec.multiModel: false`).
 
+### Legacy Serverless ISVC stuck in Terminating (finalizer deadlock)
+
+**Symptom:** an old Serverless-mode `InferenceService` won't delete — `oc delete isvc <name>` hangs, the object keeps showing a `deletionTimestamp` with finalizers still set, and the KServe controller logs show it failing to reach Knative/Istio APIs ("the delete command seems to be looking for serverless and service mesh").
+
+**Cause:** the ISVC was left undeleted while Serverless / Service Mesh were removed, so its finalizer can't garbage-collect the Knative `Service` / Istio `VirtualService` it owns — the API groups are gone and the finalizer never clears. This is the ordering trap from the pre-upgrade sequence; it surfaces post-upgrade when someone tries to clean up a leftover ISVC.
+
+**Resolution:** full diagnosis + both recovery paths (reinstate the operators and let the finalizer run, or force-clear the finalizer and recreate as RawDeployment) are in [../kserve.md](../kserve.md) § *Recover a stuck (Terminating) InferenceService — finalizer deadlock*. Post-upgrade the operators are usually already uninstalled, so the fallback (force-clear finalizer → recreate from backup) is typically the applicable path.
+
 ### OpenShift Serverless operator not removed
 
 **Symptom:** `KnativeServing` still Ready, idle pods in `knative-serving`.

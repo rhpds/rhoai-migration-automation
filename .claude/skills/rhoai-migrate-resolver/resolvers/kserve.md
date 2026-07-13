@@ -28,6 +28,10 @@ Per migration guide §2.8.3, in this order. Skipping ahead leaves the cluster in
 
 Re-run `rhai-cli lint --checks "*kserve*" --checks "*modelmesh*"` after each major step.
 
+> **⚠️ The order is load-bearing — getting it backwards strands your ISVCs undeletable.** Steps 2–4 (convert **and delete** every legacy Serverless/ModelMesh ISVC) must complete *while Serverless and Service Mesh are still installed* (steps 8–9). A Serverless-mode `InferenceService` carries a KServe finalizer whose cleanup logic garbage-collects the Knative `Service` and the Istio `VirtualService` it owns. If you set `serving.managementState: Removed` / `serviceMesh: Removed` or uninstall the Serverless/Service Mesh operators **before** those ISVCs are deleted, the finalizer can never run — it tries to reach `services.serving.knative.dev` / `virtualservices.networking.istio.io` API groups that no longer exist, errors out, and never clears itself. The ISVC then hangs in `Terminating` forever. This is the same finalizer-ordering trap documented for the SMMR in *§ Uninstall Service Mesh v2* (delete the finalizer-bearing object *before* removing the controller that processes its finalizer). Recovery once wedged is in *§ Recover a stuck (Terminating) InferenceService* below.
+>
+> **Two mistakes that combine to trigger it:** (a) running `serverless-to-raw.sh` without `--delete-existing` (or the `-raw` side-by-side path) and then skipping the manual delete of the legacy ISVCs; **then** (b) removing Serverless/Service Mesh before going back to delete them. Either one alone is survivable — together they deadlock.
+
 ---
 
 ## § Convert Serverless InferenceServices to RawDeployment
@@ -401,6 +405,69 @@ oc get csv -n openshift-operators | grep authorino-operator
 ```
 
 > **Earlier revisions** of this resolver had the cleanup capture `installedCSV` from the standalone Subscription and `oc delete csv` it, on the rationale that RHCL lived in a separate namespace (`kuadrant-system`) with its own bundled Authorino CSV. That was only correct when RHCL was installed into `kuadrant-system`. The RHCL v1.3.3 install mode requirement (AllNamespaces / `openshift-operators` — see *§ Install Red Hat Connectivity Link*) shares the CSV with the standalone install. Drop the CSV delete to avoid breaking RHCL.
+
+---
+
+## § Recover a stuck (Terminating) InferenceService — finalizer deadlock
+
+**Symptom:** `oc delete isvc <name>` hangs and never returns (or times out). The ISVC stays listed with a `deletionTimestamp` set but is not removed. The KServe controller logs show it repeatedly failing to reach Knative/Istio APIs — the operator described it as "the delete command was changing / it seems to be looking for serverless and service mesh."
+
+**Cause:** a Serverless-mode ISVC's finalizer cleanup needs the Knative and Service Mesh controllers/CRDs present to garbage-collect the `Service` and `VirtualService` it owns. If Serverless / Service Mesh were removed *before* the ISVC was deleted (the ordering trap in *The migration sequence matters* above), the finalizer errors against the now-absent API groups and never clears. See architectural-changes.md § *Model Serving Migration* for why these ISVCs must be converted+deleted pre-upgrade; the ordering itself is migration guide §2.8.7 → §2.8.9.
+
+### Diagnose first
+
+Confirm it's a finalizer deadlock and not a slow delete before touching anything:
+
+```
+NS=<namespace>; NAME=<isvc>
+
+# deletionTimestamp set + finalizers still present == wedged
+oc get isvc "$NAME" -n "$NS" -o jsonpath='deletionTimestamp={.metadata.deletionTimestamp}{"\n"}finalizers={.metadata.finalizers}{"\n"}deploymentMode={.status.deploymentMode}{"\n"}'
+
+# controller erroring against the missing APIs confirms the cause
+oc logs -n redhat-ods-applications deploy/kserve-controller-manager --tail=80 \
+  | grep -iE 'knative|istio|virtualservice|no matches for kind|not found'
+```
+
+If `deletionTimestamp` is set and `finalizers` is non-empty, and the log shows Knative/Istio lookup failures, it's the deadlock.
+
+### Preferred recovery — let the finalizer run properly
+
+The cleanest fix is to give the finalizer back what it needs, so it does its real cleanup instead of orphaning children. **If the operators aren't yet uninstalled** (only `managementState: Removed`), flip Serverless/Service Mesh back to `Managed` on the DSC/DSCI, wait for the controllers to come up, then re-issue the delete — it completes normally:
+
+```
+oc patch $(oc get dsc -o name | head -n1) --type=merge -p '{"spec":{"components":{"kserve":{"serving":{"managementState":"Managed"}}}}}'
+oc patch $(oc get dsci -o name | head -n1) --type=merge -p '{"spec":{"serviceMesh":{"managementState":"Managed"}}}'
+# wait for kserve/knative/istio controllers to be Ready, then:
+oc delete isvc "$NAME" -n "$NS"
+```
+
+Once every legacy ISVC is deleted, redo the removal steps *in the correct order*.
+
+### Fallback recovery — force-clear the finalizer
+
+If the operators are already fully uninstalled (CRDs gone) and reinstalling them isn't practical, force-remove the finalizer so the object deletes, then recreate the workload as RawDeployment from your backup YAML:
+
+```
+NS=<namespace>; NAME=<isvc>
+oc patch isvc "$NAME" -n "$NS" --type=merge -p '{"metadata":{"finalizers":null}}'
+oc get isvc "$NAME" -n "$NS" 2>/dev/null || echo "deleted"
+```
+
+> **Risk (one sentence):** force-clearing the finalizer skips the real cleanup, so any Knative `Service` / Istio `VirtualService` children the finalizer *would* have deleted may be left orphaned — harmless on a cluster where Serverless/Service Mesh are being torn out anyway, but sweep for leftovers (`oc get ksvc,virtualservice -n "$NS"`) if you're not.
+
+Batch form for a whole namespace of stuck Serverless ISVCs:
+
+```
+NS=<namespace>
+for name in $(oc get isvc -n "$NS" -o json \
+  | jq -r '.items[] | select(.metadata.deletionTimestamp != null) | .metadata.name'); do
+  echo "force-clearing finalizer on $name"
+  oc patch isvc "$name" -n "$NS" --type=merge -p '{"metadata":{"finalizers":null}}'
+done
+```
+
+Then recreate each from the backup the conversion script wrote under `/tmp/rhoai-upgrade-backup/model-serving/serverless-to-raw/<isvc>/` (or your own export), with `serving.kserve.io/deploymentMode: RawDeployment`.
 
 ---
 
