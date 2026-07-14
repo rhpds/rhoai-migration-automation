@@ -276,6 +276,20 @@ else
   check PASS "[model-serving] Service Mesh v2" "uninstalled"
 fi
 
+# [operator] Service Mesh Operator 3 must stay <= 3.3.x on OCP 4.19-4.21.
+# OSSM 3.4.0 rejects the ingress-operator-pinned Gateway API Istio v1.26.2 as
+# end-of-life, breaking openshift-gateway with a ReconcileError and no supported
+# downgrade. Not an RHOAI bug — ref OSSM-14917 / OCPBUGS-92038 / RHOAIENG-76376.
+ossm3_csv=$(oc get csv -A --no-headers 2>/dev/null | grep -oE 'servicemeshoperator3\.v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+if [ -n "$ossm3_csv" ]; then
+  ossm3_ver=${ossm3_csv#servicemeshoperator3.v}
+  if [ "$(printf '%s\n3.4.0\n' "$ossm3_ver" | sort -V | head -1)" = "3.4.0" ]; then
+    check FAIL "[operator] Service Mesh Operator $ossm3_ver" "OSSM >= 3.4.0 breaks openshift-gateway on OCP 4.19-4.21 (Istio v1.26.2 EOL validation, no downgrade) — pin OSSM3 <= 3.3.x with Manual approval; ref OSSM-14917/OCPBUGS-92038"
+  else
+    check PASS "[operator] Service Mesh Operator $ossm3_ver" "<= 3.3.x — safe on OCP 4.19-4.21"
+  fi
+fi
+
 # [kfto] PyTorchJobs
 if oc get pytorchjob -A --no-headers 2>/dev/null | grep -q .; then
   check PASS "[kfto] PyTorchJobs present" "$(oc get pytorchjob -A --no-headers 2>/dev/null | wc -l | tr -d ' ') jobs"
