@@ -111,7 +111,7 @@ Walk through **every FAIL and every TODO**, one component at a time, in the orde
 | --- | --- | --- |
 | RHOAI Operator | [post-upgrade/operator.md](resolvers/post-upgrade/operator.md) | DSC/DSCI Ready, Gateway ready, Kueue recovery, disconnected-OSSM3 troubleshooting |
 | Model Serving | [post-upgrade/model-serving.md](resolvers/post-upgrade/model-serving.md) | Restore ConfigMap management, troubleshoot 503s + leftover 2.x operators |
-| Workbenches | [post-upgrade/workbenches.md](resolvers/post-upgrade/workbenches.md) | Patch stopped workbenches, deferred custom-image migration (**before** Ray) |
+| Workbenches | [post-upgrade/workbenches.md](resolvers/post-upgrade/workbenches.md) | Patch stopped workbenches, deferred custom-image migration (**before** Ray), freeze default ImageStream reconciliation (hide ROCm / preserve old tags), 2025.2 GPU CUDA Error 803 |
 | Ray Training Operator | [post-upgrade/ray.md](resolvers/post-upgrade/ray.md) | RayCluster migration script (requires workbenches first) |
 | AI Hub Registry + Catalog | [post-upgrade/registry-catalog.md](resolvers/post-upgrade/registry-catalog.md) | Model Registry + Catalog pod verification, nav-change comms |
 | Feature Store | [post-upgrade/feast.md](resolvers/post-upgrade/feast.md) | Feature Store verification (Tech Preview → GA) |

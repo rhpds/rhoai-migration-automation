@@ -124,6 +124,34 @@ This is a known issue with a KB article — do not try to resolve inline:
   ```
 - Follow the KB: [OpenShift Service Mesh 3.x fails to deploy on a disconnected cluster during Red Hat OpenShift AI installation](https://access.redhat.com/solutions/7141146).
 
+## Service Mesh Operator 3.4.0 breaks the gateway on OCP 4.19–4.21
+
+> **Do not approve the `servicemeshoperator3` upgrade to 3.4.0.** After the RHOAI migration, OLM parks an "upgrade available" InstallPlan in front of the Service Mesh Operator 3 subscription. Approving it (fresh installs hit this too) breaks the OpenShift Gateway API.
+
+**Symptom:** the `openshift-gateway` Istio resource enters a permanent `ReconcileError`:
+
+```
+validation error: version "v1.26.2" is end-of-life and cannot be installed; use a supported version
+```
+
+Deleting the resource recreates it with the same error; manually editing the version to a supported one (e.g. `v1.30.1`) is reverted within seconds.
+
+**Cause:** on OCP 4.19–4.21 the `cluster-ingress-operator` **hardcodes** the Gateway API Istio version to `v1.26.2` and continuously reconciles the `openshift-gateway` resource back to it. OSSM **3.4.0** added a validation gate that rejects `v1.26.2` as end-of-life. So the version the ingress operator insists on is the version the mesh operator refuses — and the ingress operator always wins the reconcile race. This is **not** an RHOAI bug and **not** a migration limitation; RHOAI validates against Service Mesh **3.2** and does not require 3.4.0. There is **no supported OSSM downgrade**, so prevention is the only clean path.
+
+**Prevent (recommended):** keep the Service Mesh Operator 3 subscription on `installPlanApproval: Manual` and pin it ≤ 3.3.x — do **not** approve the 3.4.0 InstallPlan until the fix ships.
+
+```
+# Confirm the installed OSSM3 version and that approval is gated
+oc get csv -A -o custom-columns='NAME:.metadata.name,PHASE:.status.phase' | grep servicemeshoperator3
+oc get subscription servicemeshoperator3 -n openshift-operators -o jsonpath='approval={.spec.installPlanApproval} channel={.spec.channel}{"\n"}'
+# If an unapproved 3.4.0 InstallPlan is waiting, leave it unapproved:
+oc get installplan -n openshift-operators -o custom-columns='NAME:.metadata.name,CSV:.spec.clusterServiceVersionNames[*],APPROVED:.spec.approved'
+```
+
+**Already on 3.4.0:** the gateway cannot be repaired in place and OSSM cannot be safely downgraded — this is a restore-from-backup support situation, not an inline patch. Do not attempt the `startingCSV` / manual-downgrade workarounds circulating informally; they have broken clusters in testing.
+
+**Tracking:** OSSM-14917 and OCPBUGS-92038 (the actual defect, affecting OCP 4.19/4.20/4.21 — a fixed z-stream, not a minor bump, is the resolution); RHOAIENG-76376 (RHOAI-side doc update). Note the affected-versions list includes 4.21, so "upgrade OCP to 4.21" is **not** a workaround.
+
 ## Dashboard URL 404 after upgrade
 
 3.x uses Gateway API — the old 2.x Route URL is gone. Users with bookmarks will get 404. Fix:

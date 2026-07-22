@@ -75,7 +75,7 @@ Some users couldn't stop theirs during the maintenance window. Those Notebooks s
 
 ### Image-version reminders
 
-- **Jupyter-based:** bump to 2025.2 (recommended).
+- **Jupyter-based:** bump to 2025.2 (recommended) — **except GPU images**, where the 2025.2 tag has a known CUDA regression on some driver versions (see § *GPU workbench Error 803 on the 2025.2 image tag* below).
 - **code-server:** **must** bump to 2025.2. Older tags are broken under 3.x routing.
 - **RStudio BuildConfig users:** tag must be `latest`. You also need a **new build** after the upgrade to pick up the Gateway API / kube-rbac-proxy image layers:
   ```
@@ -101,6 +101,123 @@ oc patch notebook "$NAME" -n "$NS" --type=merge -p '{
     "image":"image-registry.openshift-image-registry.svc:5000/redhat-ods-applications/custom-rh-cuda-jupyter-datascience-py311-main:jupyter-datascience-c9s-py311-cuda-devel-main"
   }]}}}}'
 ```
+
+## Freezing default ImageStream reconciliation (hide ROCm, preserve older tags)
+
+> Field-discovered on a 3.4 cluster (support case 04488542) — not yet documented in the migration guide. The fix follows KCS 7127886 (converting a managed image to BYON/unmanaged).
+
+In 3.x the **Workbenches component of the DataScienceCluster owns the default (OOTB) notebook ImageStreams and reconciles them continuously.** There is no supported native toggle to hide default images yet (the RFE is approved but unshipped as of 3.4). Because of the reconcile loop:
+
+- Deleting a default ImageStream → it is recreated.
+- Removing `opendatahub.io/notebook-image` / `opendatahub.io/dashboard` labels → they are re-added.
+- Once a newer tag exists (e.g. `2025.2`), the controller annotates older tags (`2025.1`) with `opendatahub.io/image-tag-outdated: "true"` and hides them from the dashboard dropdown. Manually deleting the annotation → it is re-added.
+- Re-adding an old image through the dashboard's BYON flow creates a **separate, duplicate** dropdown entry — not a replacement for the hidden one.
+
+### Fix — freeze the ImageStream so the controller stops managing it
+
+Relabel the **existing** managed ImageStream as user-owned. `app.kubernetes.io/created-by=byon` signals BYON ownership, and the controller then leaves it alone — no recreation, no re-annotation, and no duplicate dropdown entry (it's still the same ImageStream object).
+
+```sh
+# Freeze — do this first, before any other label/annotation edit sticks
+oc label imagestream <name> -n redhat-ods-applications \
+  app.kubernetes.io/created-by=byon --overwrite
+```
+
+Then apply the outcome you want on the now-frozen ImageStream:
+
+```sh
+# (a) Hide it — e.g. ROCm images on an NVIDIA-only cluster
+oc label imagestream <name> -n redhat-ods-applications \
+  opendatahub.io/notebook-image=false opendatahub.io/dashboard=false --overwrite
+
+# (b) Keep an older tag usable — strip the outdated annotation from that tag
+oc annotate imagestreamtag <name>:2025.1 -n redhat-ods-applications \
+  opendatahub.io/image-tag-outdated-
+```
+
+Find the ROCm ImageStreams to freeze/hide:
+
+```sh
+oc get imagestream -n redhat-ods-applications -o name | grep -i rocm
+```
+
+> **Tradeoff — say this to the user explicitly.** A frozen ImageStream no longer receives operator updates: no new tags, no CVE-patched digests. You now own its lifecycle. Keep a list of which images you froze so a later maintainer knows why they've stopped tracking the release stream. This is a deliberate escape hatch, not a default — revisit it once the hide-default-images RFE ships.
+
+### Verify
+
+```sh
+# Which ImageStreams are now user-owned (frozen)
+oc get imagestream -n redhat-ods-applications -l app.kubernetes.io/created-by=byon \
+  -o custom-columns='NAME:.metadata.name,NOTEBOOK:.metadata.labels.opendatahub\.io/notebook-image,DASHBOARD:.metadata.labels.opendatahub\.io/dashboard'
+
+# Confirm the outdated annotation is gone (empty output = cleared and staying cleared)
+oc get imagestreamtag <name>:2025.1 -n redhat-ods-applications \
+  -o jsonpath='{.metadata.annotations.opendatahub\.io/image-tag-outdated}'
+```
+
+Then confirm in the dashboard: the ROCm images are gone from the dropdown, and the preserved `2025.1` tag is selectable without a duplicate BYON entry.
+
+## GPU workbench Error 803 on the 2025.2 image tag (CUDA compat path)
+
+> Field-discovered on a 3.4 cluster (support case 04488542); root cause tracked in JIRA **AIPCC-7894**. This is an **image regression**, not a cluster misconfiguration.
+
+**Symptom.** A GPU workbench started from the **`2025.2`** tag of a CUDA image (`pytorch`, `tensorflow`, `minimal-gpu`) can't reach the GPU: `torch.cuda.is_available()` is `False`, and CUDA init raises
+
+```
+Error 803: system has unsupported display driver / cuda driver combination
+```
+
+`nvidia-smi` works in the `nvidia-driver-daemonset` pod and the same image's `2025.1` / `3.4` tags work — only `2025.2` fails.
+
+**Root cause.** The `2025.2` image ships an **active** `/usr/local/cuda/compat` entry in `/etc/ld.so.conf.d/*cuda*`, which puts the container's CUDA *compat* `libcuda.so.1` ahead of the **host driver's** `libcuda.so.1` that the NVIDIA Container Toolkit bind-mounts into `/lib64`. The compat lib then mismatches the host kernel driver → Error 803. Fixed images comment the compat line out; per AIPCC-7894 the compat path must come **after** `/lib64`.
+
+### Diagnose (run inside the workbench terminal)
+
+```sh
+cat /etc/ld.so.conf.d/*cuda*                 # a *non-commented* /usr/local/cuda/compat line = affected
+env | grep -E 'CUDA|NVIDIA|NUMBA'            # NUMBA_CUDA_DRIVER=/usr/local/cuda/compat/libcuda.so.1 confirms it
+ldconfig -p | grep -i libcuda
+```
+
+### Fix — force the host driver path ahead of compat
+
+Set `LD_LIBRARY_PATH=/lib64` on the workbench so the loader finds the host `libcuda.so.1` first. First check whether the container already defines `LD_LIBRARY_PATH` — that decides `add` vs `replace`:
+
+```sh
+NS=<ns>; NAME=<notebook>
+oc get notebook "$NAME" -n "$NS" \
+  -o jsonpath='{range .spec.template.spec.containers[0].env[*]}{.name}{"\n"}{end}' | grep -n LD_LIBRARY_PATH
+```
+
+If it is **not** present, append it:
+
+```sh
+NS=<ns>; NAME=<notebook>
+oc patch notebook "$NAME" -n "$NS" --type=json -p='[
+  {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"LD_LIBRARY_PATH","value":"/lib64"}}
+]'
+```
+
+If it **is** present at index `<i>` (from the grep line number, zero-based), replace that element instead:
+
+```sh
+NS=<ns>; NAME=<notebook>
+oc patch notebook "$NAME" -n "$NS" --type=json -p='[
+  {"op":"replace","path":"/spec/template/spec/containers/0/env/<i>","value":{"name":"LD_LIBRARY_PATH","value":"/lib64"}}
+]'
+```
+
+Restart the workbench (stop/start) so the new env takes effect.
+
+**Alternative — pin to the `2025.1` tag** (which lacks the bad compat ordering) until a fixed `2025.2` image ships. If that tag has been hidden by the outdated-annotation behavior, un-hide it first via § *Freezing default ImageStream reconciliation* above.
+
+### Verify (inside the workbench)
+
+```sh
+python3 -c 'import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0))'
+```
+
+Expect `True` and the GPU model name (e.g. `NVIDIA L4`).
 
 ## Callouts
 

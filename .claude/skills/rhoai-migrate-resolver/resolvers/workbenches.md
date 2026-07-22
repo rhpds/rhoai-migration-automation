@@ -158,6 +158,8 @@ The OOTB workbench images switched their source registry between tag generations
 
 Both remain functional after the 3.3.2 upgrade. The migration just bumps the operator-managed ImageStreams; existing Notebook CRs keep their existing image refs unless the owner explicitly bumps the tag.
 
+> **Before you bump GPU workbenches to `2025.2`:** the `2025.2` tag of the CUDA images (`pytorch`, `tensorflow`, `minimal-gpu`) has a known regression on some NVIDIA driver versions — a stray `/usr/local/cuda/compat` entry in the loader path shadows the host `libcuda.so.1` and CUDA init fails with `Error 803: system has unsupported display driver / cuda driver combination` (JIRA AIPCC-7894, support case 04488542). It only surfaces once the workbench is started post-upgrade. Plan to either keep GPU workbenches on `2025.1` or apply the `LD_LIBRARY_PATH=/lib64` workaround — see [post-upgrade/workbenches.md § GPU workbench Error 803 on the 2025.2 image tag](post-upgrade/workbenches.md). CPU/Jupyter images are unaffected.
+
 ### 4. All workbenches must be Stopped before the upgrade
 
 **rhai-cli signal:** `workload / notebook / stopped`.
