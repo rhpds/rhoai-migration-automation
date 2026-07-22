@@ -64,6 +64,15 @@ If you see a sample sitting `OutOfSync / Missing` for more than ~30 min after
 the DSC reports `Ready`, that budget wasn't the issue — check the app's
 `.status.operationState.message` for the underlying failure.
 
+The retry-heavy policy above increases the application-controller's working set
+(more concurrent apply attempts, more git renders per unit time). The default
+operator-installed memory limit of 2Gi is not enough — observed steady-state on
+a fresh install is ~1.7 GiB with spikes above 2Gi during initial sync, and
+OOMKills on the controller show up as sample apps stuck with only some resources
+applied (Namespaces + PVCs land, ISVCs don't).
+[bootstrap/15-argocd-config.yaml](bootstrap/15-argocd-config.yaml) bumps the
+`spec.controller.resources.limits.memory` to 6Gi to eliminate the OOM.
+
 ## Bootstrap
 
 1. Fork this repo to a Git remote Argo CD can reach.
