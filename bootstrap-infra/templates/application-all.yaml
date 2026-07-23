@@ -1,33 +1,32 @@
+{{- if .Values.overlay.all }}
 ---
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: rhoai-2254-sample-pipelines
+  name: rhoai-2254-all
   namespace: openshift-gitops
-  annotations:
-    argocd.argoproj.io/sync-wave: "20"
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
   source:
     repoURL: https://github.com/rhpds/rhoai-migration-automation.git
-    targetRevision: main
-    path: rhoai-2254-install/30-samples/pipelines
+    targetRevision: {{ .Values.repoRevision }}
+    path: rhoai-2254-install/gitops/overlays/all
   destination:
     server: https://kubernetes.default.svc
-    namespace: dspa-sample
+    namespace: openshift-gitops
   syncPolicy:
     automated:
       selfHeal: true
       prune: true
     syncOptions:
       - CreateNamespace=true
-      - SkipDryRunOnMissingResource=true
-      - RespectIgnoreDifferences=true
+      - ApplyOutOfSyncOnly=true
     retry:
-      limit: 60
+      limit: 10
       backoff:
         duration: 30s
         factor: 2
-        maxDuration: 2m
+        maxDuration: 5m
+{{- end }}

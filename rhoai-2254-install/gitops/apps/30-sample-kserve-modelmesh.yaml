@@ -15,10 +15,10 @@ metadata:
 spec:
   project: default
   sources:
-    - repoURL: https://github.com/rh-aiservices-bu/rhoai-2.25-baseline.git
+    - repoURL: https://github.com/rhpds/rhoai-migration-automation.git
       targetRevision: main
       path: rhoai-2254-install/30-samples/kserve-modelmesh
-    - repoURL: https://github.com/rh-aiservices-bu/rhoai-2.25-baseline.git
+    - repoURL: https://github.com/rhpds/rhoai-migration-automation.git
       targetRevision: main
       path: rhoai-2254-install/gitops/hooks
       directory:
