@@ -6,3 +6,22 @@ metadata:
   namespace: openshift-gitops
 spec:
   kustomizeBuildOptions: "--load-restrictor=LoadRestrictionsNone"
+  # Default operator memory limit for the application-controller is 2Gi.
+  # Under the 30-sample-* retry policy (retry.limit: 60, backoff.maxDuration:
+  # 2m — see rhoai-2254-install/gitops/apps/30-sample-*.yaml) the controller's
+  # working set — active Applications + rendered manifests + concurrent apply
+  # attempts — comfortably exceeds 2Gi across the ~20 Applications this install
+  # creates. Observed peak on a fresh install: ~1.7 GiB steady-state, spiking
+  # during initial sync. Leaving the default in place causes recurring OOMKills
+  # every ~20s during bootstrap, leaving some resources half-applied
+  # (Namespaces + PVCs land, ISVCs don't). Bumping the limit to 6Gi eliminates
+  # the OOM without needing to soften the retry policy that the CRD-race
+  # workaround depends on.
+  controller:
+    resources:
+      limits:
+        cpu: "2"
+        memory: "6Gi"
+      requests:
+        cpu: "250m"
+        memory: "1Gi"
